@@ -26,7 +26,7 @@ const state = {
   gh: lsGet(LS.gh) || { cache: {}, prs: null, run: null, commit: null, fetchedAt: 0, error: '', rateResetAt: 0 },
   calo: lsGet(LS.calo) || { checkedAt: 0, online: null },
 };
-window.NOVA = { state, conn, version: '1.2.0' }; // read-only hook for add-on layers (e.g. a 3D renderer)
+window.NOVA = { state, conn, version: '1.3.0' }; // read-only hook for add-on layers (e.g. a 3D renderer)
 const emit = (name, detail) => window.dispatchEvent(new CustomEvent('nova:' + name, { detail }));
 
 // ---------- time ----------
@@ -89,12 +89,16 @@ const ICONS = {
   ext: '<path d="M12 7 H7 V21 H21 V16 M15 7 H21 V13 M21 7 L13 15"/>',
   alert: '<path d="M14 5 L24 22 H4 Z M14 12 V16 M14 19 V19.5"/>',
   commit: '<circle cx="14" cy="14" r="4"/><path d="M4 14 H10 M18 14 H24"/>',
+  full: '<path d="M5 11 V5 H11 M17 5 H23 V11 M23 17 V23 H17 M11 23 H5 V17"/>',
+  exitfull: '<path d="M11 5 V11 H5 M23 11 H17 V5 M17 23 V17 H23 M5 17 H11 V23"/>',
+  gear: '<circle cx="14" cy="14" r="3.5"/><path d="M14 4 V7 M14 21 V24 M4 14 H7 M21 14 H24 M6.9 6.9 L9 9 M19 19 L21.1 21.1 M6.9 21.1 L9 19 M19 9 L21.1 6.9"/>',
+  monitor: '<rect x="4" y="6" width="20" height="13" rx="1.5"/><path d="M10 23 H18 M14 19 V23"/>',
 };
 const ic = (n, s = 24, col = 'var(--acc)', sw = 1.6) => `<svg width="${s}" height="${s}" viewBox="0 0 28 28" fill="none" stroke="${col}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
 const hexIc = (n) => `<div class="ic"><svg class="hex" viewBox="0 0 52 52" fill="none"><path d="M26 2 L47 14 L47 38 L26 50 L5 38 L5 14 Z" stroke="var(--acc)" stroke-width="1.3" fill="rgba(64,214,255,.07)"/></svg>${ic(n, 26)}</div>`;
 const brandMark = (s = 34) => `<svg class="mark" width="${s}" height="${s}" viewBox="0 0 40 40" fill="none" aria-hidden="true">
  <path d="M20 2 L36 11 L36 29 L20 38 L4 29 L4 11 Z" stroke="var(--acc)" stroke-width="1.5" opacity=".9"/>
- <circle cx="20" cy="20" r="8" stroke="var(--acc)" stroke-width="1.5"/><circle cx="20" cy="20" r="3.5" fill="var(--acc)" style="filter:drop-shadow(0 0 4px var(--acc))"/>
+ <circle cx="20" cy="20" r="8" stroke="var(--acc)" stroke-width="1.5"/><circle cx="20" cy="20" r="3.5" fill="var(--acc)" style="filter:drop-shadow(0 0 0.25rem var(--acc))"/>
  <path d="M20 2 V8 M36 29 L31 26 M4 29 L9 26" stroke="var(--acc)" stroke-width="1.5" opacity=".7"/></svg>`;
 const COL = { ok: 'rgb(84,232,170)', warn: 'rgb(255,184,77)', bad: 'rgb(255,107,107)', acc: 'rgb(64,214,255)', dim: 'rgba(64,214,255,.25)' };
 
@@ -109,13 +113,13 @@ function coreRing(arcs, withClock = true) {
     const st = (arcs[i] || {}).state || 'pending';
     const col = st === 'ok' ? COL.acc : st === 'warn' ? COL.warn : st === 'bad' ? COL.bad : COL.dim;
     a += `<g><title>${esc((arcs[i] || {}).title || '')}</title><path d="${arc(200, 200, 168, a0, a1)}" stroke="rgba(64,214,255,.15)" stroke-width="8" fill="none" stroke-linecap="round"/>`;
-    if (st !== 'pending') a += `<path d="${arc(200, 200, 168, a0, a1)}" stroke="${col}" stroke-width="8" fill="none" stroke-linecap="round" style="filter:drop-shadow(0 0 6px ${col})"/>`;
+    if (st !== 'pending') a += `<path d="${arc(200, 200, 168, a0, a1)}" stroke="${col}" stroke-width="8" fill="none" stroke-linecap="round" style="filter:drop-shadow(0 0 0.375rem ${col})"/>`;
     a += '</g>';
   });
   let segIn = '';
   for (let i = 0; i < 10; i++) { const d = i * 36 + 4; segIn += `<path d="${arc(200, 200, 128, d, d + 28)}" stroke="var(--acc)" stroke-width="10" fill="none" opacity=".55"/>`; }
   const c = clockParts();
-  const inner = withClock ? `<text data-clock x="200" y="190" text-anchor="middle" font-family="Orbitron" font-weight="600" font-size="46" fill="#e2f6ff" style="filter:drop-shadow(0 0 10px rgba(64,214,255,.6))">${c.hm}</text>
+  const inner = withClock ? `<text data-clock x="200" y="190" text-anchor="middle" font-family="Orbitron" font-weight="600" font-size="46" fill="#e2f6ff" style="filter:drop-shadow(0 0 0.625rem rgba(64,214,255,.6))">${c.hm}</text>
     <text data-ampm x="200" y="222" text-anchor="middle" font-family="JetBrains Mono" font-size="13" letter-spacing="3" fill="#9beaff">${c.ap} · ${c.zone}</text>
     <text x="200" y="244" text-anchor="middle" font-family="JetBrains Mono" font-size="11" letter-spacing="2.5" fill="#7f9db3">HALIFAX</text>` : '';
   return `<svg viewBox="0 0 400 400" fill="none" role="img" aria-label="System status ring">
@@ -132,7 +136,7 @@ function bunny(w = 170) {
   <defs><linearGradient id="bf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="rgba(64,214,255,.28)"/><stop offset="1" stop-color="rgba(64,214,255,.04)"/></linearGradient>
   <linearGradient id="beam" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="rgba(64,214,255,.25)"/><stop offset="1" stop-color="rgba(64,214,255,0)"/></linearGradient></defs>
   <path d="M40 176 L70 40 L130 40 L160 176 Z" fill="url(#beam)" opacity=".5"/>${scan}
-  <g stroke="var(--acc)" stroke-width="1.6" fill="url(#bf)" style="filter:drop-shadow(0 0 5px rgba(64,214,255,.7))">
+  <g stroke="var(--acc)" stroke-width="1.6" fill="url(#bf)" style="filter:drop-shadow(0 0 0.3125rem rgba(64,214,255,.7))">
    <ellipse cx="86" cy="62" rx="11" ry="34" transform="rotate(-12 86 62)"/><ellipse cx="112" cy="60" rx="11" ry="34" transform="rotate(14 112 60)"/>
    <ellipse cx="100" cy="138" rx="38" ry="34"/><circle cx="100" cy="100" r="28"/><ellipse cx="128" cy="150" rx="10" ry="9"/></g>
   <ellipse cx="86" cy="62" rx="4" ry="20" transform="rotate(-12 86 62)" stroke="var(--acc)" opacity=".5"/><ellipse cx="112" cy="60" rx="4" ry="20" transform="rotate(14 112 60)" stroke="var(--acc)" opacity=".5"/>
@@ -144,7 +148,7 @@ function miniRing(pct, st, center) {
   const col = st === 'ok' ? COL.ok : st === 'warn' ? COL.warn : st === 'bad' ? COL.bad : COL.acc;
   const C = 2 * Math.PI * 31, p = Math.max(0, Math.min(100, pct ?? 100));
   return `<div class="tring"><svg width="74" height="74" viewBox="0 0 74 74" aria-hidden="true"><circle cx="37" cy="37" r="31" stroke="rgba(64,214,255,.15)" stroke-width="6" fill="none"/>
-  <circle cx="37" cy="37" r="31" stroke="${col}" stroke-width="6" fill="none" stroke-dasharray="${R(C * p / 100)} ${R(C)}" stroke-linecap="round" transform="rotate(-90 37 37)" style="filter:drop-shadow(0 0 4px ${col})"/></svg><span class="c">${center}</span></div>`;
+  <circle cx="37" cy="37" r="31" stroke="${col}" stroke-width="6" fill="none" stroke-dasharray="${R(C * p / 100)} ${R(C)}" stroke-linecap="round" transform="rotate(-90 37 37)" style="filter:drop-shadow(0 0 0.25rem ${col})"/></svg><span class="c">${center}</span></div>`;
 }
 
 // ---------- derived ----------
@@ -213,14 +217,14 @@ function caloPanel() {
   return `<div class="panel calo">
    <div class="bun"><div class="holo" data-holo-slot>${bunny(150)}</div><span class="label">Calo guide${n3d.webgl ? ' · drag' : ''}</span></div>
    <div class="cstats">
-    <div class="ph" style="margin-bottom:12px"><h3>${esc(c.name || 'Calo')} App</h3>${s.badge}</div>
+    <div class="ph" style="margin-bottom:0.75rem"><h3>${esc(c.name || 'Calo')} App</h3>${s.badge}</div>
     <div class="kv"><div><div class="label">Version</div><div class="big">${esc(s.version)}</div></div>
      <div title="No analytics connected yet"><div class="label">Installs</div><div class="big soonv">Coming soon</div></div>
      <div title="No analytics connected yet"><div class="label">Active today</div><div class="big soonv">Coming soon</div></div></div>
     <div class="mutedt sm phone-only">v${esc(s.version)} · ${c.checkedAt ? 'checked ' + esc(ago(c.checkedAt)) : 'checking'}</div>
-    <div class="mutedt livelink" style="font-size:13px;margin-top:14px">Live at <a class="lnk" href="${CALO}" target="_blank" rel="noopener">tyler467890.github.io/student-day-planner</a>${c.checkedAt ? ` · checked <span data-ago="${c.checkedAt}">${esc(ago(c.checkedAt))}</span>` : ''}</div>
+    <div class="mutedt livelink" style="font-size:0.8125rem;margin-top:0.875rem">Live at <a class="lnk" href="${CALO}" target="_blank" rel="noopener">tyler467890.github.io/student-day-planner</a>${c.checkedAt ? ` · checked <span data-ago="${c.checkedAt}">${esc(ago(c.checkedAt))}</span>` : ''}</div>
    </div>
-   <div class="updates"><div class="label" style="margin-bottom:8px">Recent updates</div>
+   <div class="updates"><div class="label" style="margin-bottom:0.5rem">Recent updates</div>
     ${up.length ? up.map((u) => `<div class="row"><span class="dot"></span><div class="grow"><b>${esc(u.title)}</b><div class="mutedt sm">${esc(dayLabel(u.time))}</div></div></div>`).join('') : '<div class="empty">No updates yet</div>'}
    </div></div>`;
 }
@@ -230,16 +234,16 @@ function ghPanel(full = false) {
   const center = rs === 'ok' ? ic('check', 28, COL.ok, 2.4) : rs === 'bad' ? ic('alert', 26, COL.bad, 2) : rs === 'warn' ? ic('clock', 26, COL.warn, 2) : '<span class="mono dimt">…</span>';
   const runTitle = !r ? (g.error ? 'GitHub unavailable' : 'Loading…') : r.status !== 'completed' ? 'Deploying now…' : r.conclusion === 'success' ? 'Pages deploy live' : 'Deploy ' + esc(r.conclusion || 'failed');
   const prs = g.prs || [];
-  const err = g.error ? `<div class="mutedt sm" style="margin-top:10px">${ic('alert', 14, COL.warn)} ${esc(g.error)}</div>` : '';
+  const err = g.error ? `<div class="mutedt sm" style="margin-top:0.625rem">${ic('alert', 14, COL.warn)} ${esc(g.error)}</div>` : '';
   return `<div class="panel gh">
    <div class="ph"><h3>GitHub<small>student-day-planner</small></h3><a href="https://github.com/${REPO}" target="_blank" rel="noopener" title="Open repo on GitHub">${ic('branch', 20)}</a></div>
    <a class="deploy hov" href="${esc(safeUrl(r && r.html_url) || 'https://github.com/' + REPO + '/actions')}" target="_blank" rel="noopener">
     ${miniRing(100, rs === 'pending' ? 'acc' : rs, center)}
     <div class="grow"><div class="label">Latest deploy${r ? ' · ' + esc(r.name || 'workflow') : ''}</div>
-     <div style="font-family:var(--font-hd);font-weight:700;font-size:22px;margin:4px 0 2px">${runTitle}</div>
+     <div style="font-family:var(--font-hd);font-weight:700;font-size:1.375rem;margin:0.25rem 0 2px">${runTitle}</div>
      <div class="mutedt sm">${r ? `<span data-ago="${esc(r.updated_at)}">${esc(ago(r.updated_at))}</span> · run #${esc(r.run_number)}` : '&nbsp;'}</div></div></a>
-   ${cm ? `<a class="row hov" style="border-top:1px solid rgba(64,214,255,.09);margin-top:14px" href="${esc(safeUrl(cm.html_url))}" target="_blank" rel="noopener">${ic('commit', 18)}<div class="grow"><b class="ell" style="display:block">${esc(cm.message)}</b><div class="mutedt sm"><span class="mono">${esc(cm.sha)}</span> · ${esc(cm.author || '')} · <span data-ago="${esc(cm.date)}">${esc(ago(cm.date))}</span></div></div></a>` : ''}
-   <div class="label" style="margin:16px 0 4px">Open pull requests · ${g.prs ? prs.length : '…'}</div>
+   ${cm ? `<a class="row hov" style="border-top:1px solid rgba(64,214,255,.09);margin-top:0.875rem" href="${esc(safeUrl(cm.html_url))}" target="_blank" rel="noopener">${ic('commit', 18)}<div class="grow"><b class="ell" style="display:block">${esc(cm.message)}</b><div class="mutedt sm"><span class="mono">${esc(cm.sha)}</span> · ${esc(cm.author || '')} · <span data-ago="${esc(cm.date)}">${esc(ago(cm.date))}</span></div></div></a>` : ''}
+   <div class="label" style="margin:1rem 0 0.25rem">Open pull requests · ${g.prs ? prs.length : '…'}</div>
    <div class="prs scroll" ${full ? 'style="max-height:none"' : ''}>
     ${g.prs ? (prs.length ? prs.map((p) => `<a class="row pr hov" href="${esc(safeUrl(p.html_url))}" target="_blank" rel="noopener"><span class="num acc">#${esc(p.number)}</span><div class="grow"><b class="ell" style="display:block">${esc(p.title)}</b><div class="mutedt sm">Updated <span data-ago="${esc(p.updated_at)}">${esc(ago(p.updated_at))}</span></div></div>${p.draft ? '<span class="badge dim">Draft</span>' : '<span class="badge acc">Ready</span>'}</a>`).join('') : '<div class="empty">No open pull requests</div>') : '<div class="empty">Loading…</div>'}
    </div>
@@ -254,7 +258,7 @@ function tasksPanel(limit) {
    <div class="ph"><h3>Today<small>Notion tasks</small></h3><span class="meta">${t.length ? `${done} of ${t.length} done` : ''}</span></div>
    <div class="tl scroll">${t.length ? list.map((x) => { const u = safeUrl(x.link); const inner = `<span class="chk ${x.done ? 'done' : ''}"></span><span class="${x.done ? 'strike' : ''}">${esc(x.title)}</span>`;
       return u ? `<a class="row hov" href="${esc(u)}" target="_blank" rel="noopener">${inner}</a>` : `<div class="row">${inner}</div>`; }).join('') : `<div class="empty">${state.statusErr ? esc(state.statusErr) : 'Decrypting tasks…'}</div>`}</div>
-   <a class="row addt desk-only" href="${NOTION_TASKS}" target="_blank" rel="noopener"><span class="acc" style="font-size:20px;line-height:1">+</span><span class="mutedt">Open tasks in Notion</span></a>
+   <a class="row addt desk-only" href="${NOTION_TASKS}" target="_blank" rel="noopener"><span class="acc" style="font-size:1.25rem;line-height:1">+</span><span class="mutedt">Open tasks in Notion</span></a>
   </div>`;
 }
 const TOOLS = [
@@ -280,8 +284,8 @@ function needPanel() {
   const n = agents().filter((a) => a.status === 'needs_you');
   if (!n.length) return '';
   return `<div class="panel needp" style="border-color:rgba(255,184,77,.45);background:rgba(255,184,77,.05)">
-   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span class="badge warn">${n.length} need${n.length === 1 ? 's' : ''} you</span><span class="mutedt" style="font-size:12px">Tap to review</span></div>
-   ${n.map((a) => `<button class="row" style="width:100%;border:0;padding:5px 0;text-align:left" data-agent="${agents().indexOf(a)}"><span class="dot warn"></span><b style="font-family:var(--font-hd);font-size:16px;white-space:nowrap">${esc(a.name)}</b><span class="mutedt ell" style="margin-left:auto;font-size:12.5px">${esc(a.task || '')}</span></button>`).join('')}
+   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.375rem"><span class="badge warn">${n.length} need${n.length === 1 ? 's' : ''} you</span><span class="mutedt" style="font-size:0.75rem">Tap to review</span></div>
+   ${n.map((a) => `<button class="row" style="width:100%;border:0;padding:0.3125rem 0;text-align:left" data-agent="${agents().indexOf(a)}"><span class="dot warn"></span><b style="font-family:var(--font-hd);font-size:1rem;white-space:nowrap">${esc(a.name)}</b><span class="mutedt ell" style="margin-left:auto;font-size:0.7812rem">${esc(a.task || '')}</span></button>`).join('')}
   </div>`;
 }
 
@@ -319,12 +323,12 @@ function agentDetail(a) {
   if (!a) return `<div class="panel head"><div class="empty">${state.statusErr ? esc(state.statusErr) : 'Decrypting team status…'}</div></div>`;
   const s = stOf(a), p = typeof a.progress === 'number' ? a.progress : null, u = safeUrl(a.link);
   const ringSt = a.status === 'needs_you' ? 'warn' : a.status === 'done' ? 'ok' : 'acc';
-  const center = p != null ? `<span style="font-family:var(--font-dp);font-weight:600;font-size:17px">${p}%</span>` : a.status === 'needs_you' ? ic('alert', 26, COL.warn, 2) : a.status === 'done' ? ic('check', 26, COL.ok, 2.4) : ic(a.status === 'idle' ? 'clock' : 'bolt', 26, a.status === 'idle' ? COL.dim : COL.acc, 2);
+  const center = p != null ? `<span style="font-family:var(--font-dp);font-weight:600;font-size:1.0625rem">${p}%</span>` : a.status === 'needs_you' ? ic('alert', 26, COL.warn, 2) : a.status === 'done' ? ic('check', 26, COL.ok, 2.4) : ic(a.status === 'idle' ? 'clock' : 'bolt', 26, a.status === 'idle' ? COL.dim : COL.acc, 2);
   return `<div class="panel head">
-   ${miniRing(p ?? (a.status === 'idle' ? 0 : 100), ringSt, center).replace('class="tring"', 'class="tring" style="width:110px;height:110px"').replace('width="74" height="74"', 'width="110" height="110"')}
+   ${miniRing(p ?? (a.status === 'idle' ? 0 : 100), ringSt, center).replace('class="tring"', 'class="tring" style="width:6.875rem;height:6.875rem"').replace('width="74" height="74"', 'width="110" height="110"')}
    <div class="grow"><div class="label">Agent · ${esc(KIND[a.kind] || a.kind || '')}</div>
     <div class="title">${esc(a.name)}</div>
-    <div class="mutedt" style="font-size:17px;margin-top:4px">${esc(a.task || 'Standing by')}</div>
+    <div class="mutedt" style="font-size:1.0625rem;margin-top:0.25rem">${esc(a.task || 'Standing by')}</div>
     ${u ? `<div class="btns"><a class="btn ${a.status === 'needs_you' ? 'pri' : ''}" href="${esc(u)}" target="_blank" rel="noopener">${a.status === 'needs_you' ? 'Review now' : 'Open'} ${ic('ext', 16, a.status === 'needs_you' ? '#1a1206' : 'var(--acc)')}</a></div>` : ''}
    </div>
    <div class="facts"><div><div class="label">Status</div><div class="fv ${a.status === 'needs_you' ? 'warnc' : a.status === 'done' ? 'okc' : ''}">${s.label}</div></div><div><div class="label">Kind</div><div class="fv">${esc(KIND[a.kind] || a.kind || '—')}</div></div><div><div class="label">Progress</div><div class="fv">${p != null ? p + '%' : '—'}</div></div></div>
@@ -359,7 +363,7 @@ function viewAgents() {
     </div>
     <div class="panel" style="flex:1;min-height:0"><div class="ph"><h3>Recent updates</h3></div>
      ${updates().map((u) => `<div class="row"><span class="dot"></span><div class="grow"><b style="font-weight:600">${esc(u.title)}</b><div class="mutedt sm">${esc(dayLabel(u.time))}</div></div></div>`).join('') || '<div class="empty">No updates yet</div>'}
-     <div class="nolog" style="margin-top:18px">${ic('users', 22)}<div>Send commands to Grok Bot, Cursor or Copilot from the Ask bar on the Overview. Replies show under it.</div></div>
+     <div class="nolog" style="margin-top:1.125rem">${ic('users', 22)}<div>Send commands to Grok Bot, Cursor or Copilot from the Ask bar on the Overview. Replies show under it.</div></div>
     </div>
    </section>
   </div>`;
@@ -371,11 +375,11 @@ function viewCalo() {
     <div class="panel cbig">
      <div class="bun"><div class="holo big" data-holo-slot>${bunny(220)}</div></div>
      <div>
-      <div class="ph" style="margin-bottom:6px"><h3 style="font-size:24px">${esc(c.name || 'Calo')} App</h3>${s.badge}</div>
-      <div class="mutedt" style="font-size:15px">${esc(c.description || 'Live check of the public Calo site.')}</div>
+      <div class="ph" style="margin-bottom:0.375rem"><h3 style="font-size:1.5rem">${esc(c.name || 'Calo')} App</h3>${s.badge}</div>
+      <div class="mutedt" style="font-size:0.9375rem">${esc(c.description || 'Live check of the public Calo site.')}</div>
       <div class="facts2">
        <div><div class="label">Version</div><div class="fv">${esc(s.version)}</div></div>
-       <div><div class="label">Cache build</div><div class="fv mono" style="font-size:16px">${esc(c.cache || '—')}</div></div>
+       <div><div class="label">Cache build</div><div class="fv mono" style="font-size:1rem">${esc(c.cache || '—')}</div></div>
        <div><div class="label">Response</div><div class="fv">${c.ms ? esc(c.ms) + ' ms' : '—'}</div></div>
        <div title="No analytics connected yet"><div class="label">Installs</div><div class="fv dimt">Coming soon</div></div>
        <div title="No analytics connected yet"><div class="label">Active users</div><div class="fv dimt">Coming soon</div></div>
@@ -396,16 +400,16 @@ function viewBusiness() {
   let grid = ''; for (let i = 0; i < 5; i++) grid += `<line x1="40" y1="${30 + i * 50}" x2="880" y2="${30 + i * 50}" stroke="rgba(64,214,255,.08)"/>`;
   return `<div class="biz">
    <div class="wm" aria-hidden="true"><span>PREVIEW</span></div>
-   <div class="bhead"><div><h1>Business</h1><div class="mutedt" style="margin-top:6px">Calo on Etsy · nothing connected yet</div></div><span class="prevtag">Preview · how this looks after launch · no real data</span></div>
+   <div class="bhead"><div><h1>Business</h1><div class="mutedt" style="margin-top:0.375rem">Calo on Etsy · nothing connected yet</div></div><span class="prevtag">Preview · how this looks after launch · no real data</span></div>
    <div class="kpis">${kpi('Revenue', 'Etsy sales')}${kpi('Net profit', 'After fees and ads')}${kpi('Orders', 'This month')}${kpi('Ad spend', 'All campaigns')}${kpi('Return on ads', 'Revenue per $1')}</div>
    <div class="brow">
     <div class="panel"><div class="ph"><h3>Sales<small>Etsy revenue and orders</small></h3><span class="soon">Coming after launch</span></div>
      <svg class="ghost" viewBox="0 0 900 240" width="100%" height="240" preserveAspectRatio="none" aria-hidden="true">${grid}
       <path d="M40 220 C150 210 220 200 300 170 S470 150 560 120 S760 70 880 50" stroke="var(--acc)" stroke-width="2" stroke-dasharray="6 7" fill="none" opacity=".6"/></svg>
-     <div class="mutedt sm" style="text-align:center;margin-top:6px">Example shape only. Real sales appear here once Etsy is connected.</div></div>
+     <div class="mutedt sm" style="text-align:center;margin-top:0.375rem">Example shape only. Real sales appear here once Etsy is connected.</div></div>
     <div class="panel"><div class="ph"><h3>Where the money goes</h3></div>
-     <div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap"><svg class="ghost" width="170" height="170" viewBox="0 0 170 170" aria-hidden="true"><circle cx="85" cy="85" r="62" fill="none" stroke="rgba(64,214,255,.25)" stroke-width="18" stroke-dasharray="6 6"/><text x="85" y="92" text-anchor="middle" font-family="Rajdhani" font-weight="700" font-size="26" fill="#4b6477">$ —</text></svg>
-      <div style="flex:1;min-width:150px">${['Net profit', 'Ads', 'Etsy fees', 'Processing & tax'].map((l) => `<div class="row"><span class="grow mutedt">${l}</span><span class="dimt mono">—</span></div>`).join('')}</div></div></div>
+     <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap"><svg class="ghost" width="170" height="170" viewBox="0 0 170 170" aria-hidden="true"><circle cx="85" cy="85" r="62" fill="none" stroke="rgba(64,214,255,.25)" stroke-width="18" stroke-dasharray="6 6"/><text x="85" y="92" text-anchor="middle" font-family="Rajdhani" font-weight="700" font-size="26" fill="#4b6477">$ —</text></svg>
+      <div style="flex:1;min-width:9.375rem">${['Net profit', 'Ads', 'Etsy fees', 'Processing & tax'].map((l) => `<div class="row"><span class="grow mutedt">${l}</span><span class="dimt mono">—</span></div>`).join('')}</div></div></div>
    </div>
    <div class="brow3">
     <div class="panel"><div class="ph"><h3>Ads</h3><span class="soon">After launch</span></div><table class="tbl"><tr><th>Campaign</th><th>Spend</th><th>Clicks</th><th>Sales</th></tr><tr><td>No campaigns yet</td><td>—</td><td>—</td><td>—</td></tr></table></div>
@@ -419,22 +423,73 @@ function viewBusiness() {
 const VIEWS = [['overview', 'Overview', 'home', 'Home'], ['agents', 'Agents', 'users', 'Team'], ['calo', 'Calo', 'rabbit', 'Calo'], ['business', 'Business', 'chart', 'Business']];
 function renderTop() {
   const c = clockParts(), sys = systems();
-  $('#topbar').innerHTML = `<a class="brand" href="#overview">${brandMark()}<div class="name">NOVA</div><div class="sub">Command Center</div></a>
+  patch($('#topbar'), `<a class="brand" href="#overview">${brandMark()}<div class="name">NOVA</div><div class="sub">Command Center</div></a>
    <nav class="nav">${VIEWS.map(([k, l]) => `<a href="#${k}" class="${state.view === k ? 'on' : ''}">${l}</a>`).join('')}</nav>
    <div class="tright"><span class="pill ${sys.issues.length ? 'warn' : ''}" title="${esc(sys.issues.join(', ') || 'Calo online, deploy OK, team feed decrypted')}"><span class="dot ${sys.issues.length ? 'warn' : 'ok'}"></span>${sys.issues.length ? sys.issues.length + (sys.issues.length === 1 ? ' issue' : ' issues') : 'All systems normal'}</span>
-    <span class="clk" data-topclock>${esc(c.date.toUpperCase())} · ${esc(c.hm)} ${esc(c.ap)} ${esc(c.zone)}</span>
-    <button class="lockbtn s2btn" data-screen2 title="Open Screen 2 (operations) in a new window for your second monitor">${ic('ext', 15, 'currentColor')}<span class="lt">Screen 2</span></button>
+    <span class="clk" data-topclock>${esc(c.date.toUpperCase())} · ${esc(c.hm)} ${esc(c.ap)} ${esc(c.zone)}</span>${fpsTag()}
+    ${fsButton()}
+    <button class="lockbtn s2btn" data-screen2 title="Open Screen 2 (operations) in its own window for your other monitor">${ic('ext', 15, 'currentColor')}<span class="lt">Screen 2</span></button>
+    <button class="lockbtn setbtn" data-settings title="Settings: performance, glass effect, two-screen setup">${ic('gear', 15, 'currentColor')}<span class="lt">Settings</span></button>
     <button class="lockbtn connbtn" data-conn title="Connections: which tools are linked to NOVA">${ic('bolt', 15, 'currentColor')}<span class="lt">Connections</span></button>
-    <button class="lockbtn" data-lock title="Lock NOVA and forget the passphrase on this device">${ic('lock', 15, 'currentColor')}<span class="lt">Lock</span></button><div class="avatar" title="Tyler Fennell">TF</div></div>`;
-  $('#tabs').innerHTML = VIEWS.map(([k, , i, l]) => `<a class="tab ${state.view === k ? 'on' : ''}" href="#${k}">${ic(i, 24, state.view === k ? 'var(--acc)' : 'var(--muted)')}<span>${l}</span></a>`).join('');
+    <button class="lockbtn" data-lock title="Lock NOVA and forget the passphrase on this device">${ic('lock', 15, 'currentColor')}<span class="lt">Lock</span></button><div class="avatar" title="Tyler Fennell">TF</div></div>`);
+  patch($('#tabs'), VIEWS.map(([k, , i, l]) => `<a class="tab ${state.view === k ? 'on' : ''}" href="#${k}">${ic(i, 24, state.view === k ? 'var(--acc)' : 'var(--muted)')}<span>${l}</span></a>`).join(''));
+}
+// ---------- in-place DOM updates ----------
+// Data refreshes re-run the templates, then only the nodes that actually changed are touched, so panels,
+// their 3D tilt state, the hologram and the command bar (focus, caret, typed text) stay put.
+const baseCls = (el) => (el.getAttribute('class') || '').split(/\s+/).filter((c) => c && !c.startsWith('n3d-')).sort().join(' ');
+const isRuntime = (n) => n.nodeType === 1 && (n.classList.contains('n3d-fx') || n.classList.contains('holo-host'));
+function sameKind(a, b) {
+  if (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName) return false;
+  if (a.nodeType !== 1) return true;
+  if (a.__n3d || a.classList.contains('panel') || b.classList.contains('panel') || a.parentElement === $('#view')) return baseCls(a) === baseCls(b);
+  return a.id === b.id;
+}
+function morphAttrs(from, to) {
+  for (const a of [...from.attributes]) {
+    if (a.name === 'class' || a.name === 'style' || to.hasAttribute(a.name)) continue;
+    if (a.name.startsWith('aria-') || a.name === 'role' || a.name === 'tabindex') { if (from.classList.contains('n3d-holo-host')) continue; }
+    from.removeAttribute(a.name);
+  }
+  for (const a of [...to.attributes]) {
+    if (a.name === 'class') { const keep = [...from.classList].filter((c) => c.startsWith('n3d-')); const want = [a.value, ...keep].join(' ').trim(); if (from.getAttribute('class') !== want) from.setAttribute('class', want); continue; }
+    if (a.name === 'style') continue;
+    if (from.getAttribute(a.name) !== a.value) from.setAttribute(a.name, a.value);
+  }
+  if (!to.hasAttribute('class') && from.hasAttribute('class')) { const keep = [...from.classList].filter((c) => c.startsWith('n3d-')).join(' '); if (keep) from.setAttribute('class', keep); else from.removeAttribute('class'); }
+  // inline style from the template; the 3D layer owns transform/clip/opacity on panels
+  const ts = to.getAttribute('style') || '';
+  if (from.__n3d) { if (from.__tpl !== undefined && from.__tpl !== ts) { from.setAttribute('style', ts); from.__n3d.tf = null; } from.__tpl = ts; }
+  else if ((from.getAttribute('style') || '') !== ts) { if (ts) from.setAttribute('style', ts); else from.removeAttribute('style'); }
+  if ((from.tagName === 'INPUT' || from.tagName === 'SELECT') && document.activeElement !== from) {
+    const v = from.tagName === 'SELECT' ? (to.querySelector('option[selected]') || to.querySelector('option') || {}).value : to.getAttribute('value') || '';
+    if (v != null && from.value !== v) from.value = v;
+  }
+}
+function morphKids(from, toParent) {
+  if (from.hasAttribute && from.hasAttribute('data-holo-slot') && from.querySelector('.holo-host')) return; // live hologram lives here
+  const live = [...from.childNodes].filter((n) => !isRuntime(n)), next = [...toParent.childNodes];
+  const anchor = [...from.childNodes].find(isRuntime) || null;
+  next.forEach((n, i) => {
+    const cur = live[i];
+    if (!cur) { from.insertBefore(n, anchor); return; }
+    if (!sameKind(cur, n)) { from.replaceChild(n, cur); return; }
+    if (cur.nodeType === 3 || cur.nodeType === 8) { if (cur.nodeValue !== n.nodeValue) cur.nodeValue = n.nodeValue; return; }
+    morphAttrs(cur, n); morphKids(cur, n);
+  });
+  for (let i = next.length; i < live.length; i++) live[i].remove();
+}
+const tpl = document.createElement('template');
+function patch(el, html) {
+  if (!el) return;
+  if (el.__html === html) return; // nothing changed at all
+  el.__html = html; tpl.innerHTML = html; morphKids(el, tpl.content);
 }
 function render() {
-  const fa = document.activeElement, keep = fa && fa.id === 'cmdtext' ? [fa.selectionStart, fa.selectionEnd] : null;
   renderTop();
   const v = state.view;
-  $('#view').innerHTML = v === 'agents' ? viewAgents() : v === 'calo' ? viewCalo() : v === 'business' ? viewBusiness() : viewOverview();
+  patch($('#view'), v === 'agents' ? viewAgents() : v === 'calo' ? viewCalo() : v === 'business' ? viewBusiness() : viewOverview());
   document.title = SCREEN2 ? 'NOVA · Screen 2' : 'NOVA · ' + (VIEWS.find((x) => x[0] === v) || VIEWS[0])[1];
-  if (keep && $('#cmdtext')) { const x = $('#cmdtext'); x.focus(); try { x.setSelectionRange(keep[0], keep[1]); } catch {} }
   renderS2(); after3D();
   emit('render', { view: v });
 }
@@ -461,14 +516,15 @@ function openAgent(i) {
 }
 function openSheet(i) {
   const a = agents()[i]; if (!a) return;
-  $('#sheet').innerHTML = `<div class="sheet" data-close><div class="panel">${agentDetail(a)}<div class="btns" style="margin-top:16px"><button class="btn" data-close>Close</button></div></div></div>`;
+  $('#sheet').innerHTML = `<div class="sheet" data-close><div class="panel">${agentDetail(a)}<div class="btns" style="margin-top:1rem"><button class="btn" data-close>Close</button></div></div></div>`;
 }
 
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-agent],[data-select],[data-filter],[data-lock],[data-ask],[data-recheck],[data-close],[data-screen2]');
+  screenClicks(e);
   if (!t) return;
   if (t.hasAttribute('data-close')) { if (e.target === t || e.target.closest('button[data-close]')) $('#sheet').innerHTML = ''; return; }
-  if (t.hasAttribute('data-screen2')) { const u = new URL(location.href); u.hash = ''; u.searchParams.set('screen', '2'); window.open(u.href, 'nova-screen-2', 'noopener'); return; }
+  if (t.hasAttribute('data-screen2')) { openScreen2(); return; }
   if (t.hasAttribute('data-agent')) openAgent(+t.getAttribute('data-agent')); else if (t.hasAttribute('data-select')) { state.selAgent = +t.getAttribute('data-select'); render(); }
   else if (t.hasAttribute('data-filter')) { state.teamFilter = t.getAttribute('data-filter'); render(); }
   else if (t.hasAttribute('data-lock')) lock();
@@ -631,10 +687,10 @@ function renderArea(area) {
     h += '<div class="dlist">';
     if (r) h += drow(rs === 'ok' ? 'ok' : rs === 'bad' ? 'bad' : 'warn', 'Latest deploy · ' + esc(r.name || 'workflow'), `${r.status !== 'completed' ? 'Deploying now' : esc(r.conclusion || '')} · run #${esc(r.run_number)} · ${esc(ago(r.updated_at))}`, '', r.html_url);
     if (cm) h += drow('', esc(cm.message), `<span class="mono">${esc(cm.sha)}</span> · ${esc(cm.author || '')} · ${esc(ago(cm.date))}`, '', cm.html_url);
-    h += '</div><div class="label" style="margin:12px 0 2px">Open pull requests</div><div class="dlist">';
+    h += '</div><div class="label" style="margin:0.75rem 0 2px">Open pull requests</div><div class="dlist">';
     h += g.prs ? (prs.length ? prs.map((p) => drow('', `#${esc(p.number)} ${esc(p.title)}`, 'Updated ' + esc(ago(p.updated_at)), p.draft ? '<span class="badge dim">Draft</span>' : '<span class="badge acc">Ready</span>', p.html_url)).join('') : '<div class="empty">No open pull requests</div>') : '<div class="empty">Loading…</div>';
     h += '</div>';
-    if (g.error) h += `<div class="mutedt sm" style="margin-top:8px">${esc(g.error)}</div>`;
+    if (g.error) h += `<div class="mutedt sm" style="margin-top:0.5rem">${esc(g.error)}</div>`;
     return h + `<div class="dfoot mutedt sm"><a class="lnk" href="https://github.com/${REPO}" target="_blank" rel="noopener">${REPO}</a>${g.fetchedAt ? ' · synced ' + esc(ago(g.fetchedAt)) : ''}</div>`;
   }
   if (area === 'tasks') {
@@ -648,12 +704,12 @@ function renderArea(area) {
     const c = state.calo, s = caloStats(), up = updates().slice(0, 4);
     const stv = !c.checkedAt ? ['…', ''] : c.online ? ['Online', 'okc'] : ['Offline', 'badc'];
     let h = kvs([['Version', esc(s.version)], ['Status', stv[0], stv[1]], ['Response', c.ms ? esc(c.ms) + ' ms' : '—']]);
-    h += `<div class="mutedt sm" style="margin:2px 0 8px">Live at <a class="lnk" href="${CALO}" target="_blank" rel="noopener">tyler467890.github.io/student-day-planner</a>${c.checkedAt ? ' · checked ' + esc(ago(c.checkedAt)) : ''}${c.cache ? ' · build <span class="mono">' + esc(c.cache) + '</span>' : ''}</div>`;
-    h += '<div class="label" style="margin:6px 0 2px">Recent updates</div><div class="dlist">' + (up.length ? up.map((u) => drow('', esc(u.title), esc(dayLabel(u.time)))).join('') : '<div class="empty">No updates yet</div>') + '</div>';
+    h += `<div class="mutedt sm" style="margin:2px 0 0.5rem">Live at <a class="lnk" href="${CALO}" target="_blank" rel="noopener">tyler467890.github.io/student-day-planner</a>${c.checkedAt ? ' · checked ' + esc(ago(c.checkedAt)) : ''}${c.cache ? ' · build <span class="mono">' + esc(c.cache) + '</span>' : ''}</div>`;
+    h += '<div class="label" style="margin:0.375rem 0 2px">Recent updates</div><div class="dlist">' + (up.length ? up.map((u) => drow('', esc(u.title), esc(dayLabel(u.time)))).join('') : '<div class="empty">No updates yet</div>') + '</div>';
     return h;
   }
   if (area === 'business') {
-    return `<p class="mutedt" style="margin-bottom:12px">Sales, profit, ads and email show up here once Calo is on Etsy. Nothing is connected yet, so there are no numbers to show.</p>
+    return `<p class="mutedt" style="margin-bottom:0.75rem">Sales, profit, ads and email show up here once Calo is on Etsy. Nothing is connected yet, so there are no numbers to show.</p>
       <div class="dlist">${[['Sales & profit', 'Etsy revenue and orders'], ['Ads', 'Spend, clicks and conversions'], ['Email', 'Support inbox']].map(([a, b]) => drow('idle', a, b, '<span class="soon">After launch</span>')).join('')}</div>`;
   }
   return '';
@@ -670,13 +726,15 @@ function renderS2() {
   if (!$('#s2')) return;
   const c = counts(), a = agents(), clk = clockParts();
   const wide = document.documentElement.getAttribute('data-n3d-layout') === 'wide' && !SCREEN2;
-  $('#s2bar').innerHTML = `<div class="brand">${brandMark()}<div class="name">NOVA</div><div class="sub">Screen 2 · Operations</div></div>
+  patch($('#s2bar'), `<div class="brand">${brandMark()}<div class="name">NOVA</div><div class="sub">Screen 2 · Operations</div></div>
    <div class="tright"><span class="pill link" data-peer><span class="dot idle"></span><span class="linktxt">${wide ? 'Wide mode · both screens' : 'Looking for screen 1…'}</span></span>
    <span class="clk" data-topclock2>${esc(clk.date.toUpperCase())} · ${esc(clk.hm)} ${esc(clk.ap)} ${esc(clk.zone)}</span>
-   ${SCREEN2 ? `<button class="lockbtn" data-lock title="Lock NOVA and forget the passphrase on this device">${ic('lock', 15, 'currentColor')}<span class="lt">Lock</span></button>` : ''}</div>`;
+   ${fpsTag()}${fsButton()}${SCREEN2 && canPlace() ? `<button class="lockbtn placebtn" data-place title="Move this window to your other monitor and make it full screen">${ic('monitor', 15, 'currentColor')}<span class="lt">Place on other monitor</span></button>` : ''}
+   <button class="lockbtn setbtn" data-settings title="Settings">${ic('gear', 15, 'currentColor')}<span class="lt">Settings</span></button>
+   ${SCREEN2 ? `<button class="lockbtn" data-lock title="Lock NOVA and forget the passphrase on this device">${ic('lock', 15, 'currentColor')}<span class="lt">Lock</span></button>` : ''}</div>`);
   const upd = state.status && state.status.updatedAt ? fTime.format(new Date(state.status.updatedAt)) : '';
-  $('#s2-feed').innerHTML = `<div class="ph"><h3>Agent activity<small>latest status</small></h3><span class="meta"><span class="acc">${c.working} working</span>${c.need ? ` · <span class="warnc">${c.need} need${c.need === 1 ? 's' : ''} you</span>` : ''}</span></div>
-   <div class="scroll s2list">${a.length ? a.map((x) => `<div class="ev2"><span class="tt">${esc(upd)}</span><span class="dot ${stOf(x).dot}"></span><div class="grow"><div class="ea">${esc(x.name)} <small class="mutedt">${esc(KIND[x.kind] || x.kind || '')}</small></div><div class="eb">${esc(stOf(x).label)}${x.task ? ' · ' + esc(x.task) : ''}</div></div></div>`).join('') : `<div class="empty">${state.statusErr ? esc(state.statusErr) : 'Decrypting team status…'}</div>`}</div>`;
+  patch($('#s2-feed'), `<div class="ph"><h3>Agent activity<small>latest status</small></h3><span class="meta"><span class="acc">${c.working} working</span>${c.need ? ` · <span class="warnc">${c.need} need${c.need === 1 ? 's' : ''} you</span>` : ''}</span></div>
+   <div class="scroll s2list">${a.length ? a.map((x) => `<div class="ev2"><span class="tt">${esc(upd)}</span><span class="dot ${stOf(x).dot}"></span><div class="grow"><div class="ea">${esc(x.name)} <small class="mutedt">${esc(KIND[x.kind] || x.kind || '')}</small></div><div class="eb">${esc(stOf(x).label)}${x.task ? ' · ' + esc(x.task) : ''}</div></div></div>`).join('') : `<div class="empty">${state.statusErr ? esc(state.statusErr) : 'Decrypting team status…'}</div>`}</div>`);
   const ev = [];
   const g = state.gh;
   if (g.run) ev.push([g.run.updated_at, runState() === 'ok' ? 'ok' : runState() === 'bad' ? 'bad' : 'warn', 'deploy', `${g.run.name || 'workflow'} #${g.run.run_number} · ${g.run.status !== 'completed' ? 'running' : g.run.conclusion}`]);
@@ -687,11 +745,11 @@ function renderS2() {
   if (state.calo.checkedAt) ev.push([state.calo.checkedAt, state.calo.online ? 'ok' : 'bad', 'uptime', `Calo ${state.calo.online ? 'online' : 'offline'}${state.calo.ms ? ' · ' + state.calo.ms + ' ms' : ''}`]);
   const tms = (v) => { const t = typeof v === 'number' ? v : Date.parse(v && v.length === 10 ? v + 'T12:00:00-03:00' : v); return isNaN(t) ? 0 : t; };
   ev.sort((x, y) => tms(y[0]) - tms(x[0]));
-  $('#s2-logs').innerHTML = `<div class="ph"><h3>Activity log<small>GitHub · Calo · team</small></h3><span class="meta">Halifax time</span></div>
-   <div class="scroll s2list">${ev.length ? ev.slice(0, 14).map(([t, k, kind, m]) => `<div class="lg"><span class="lt">${tms(t) ? esc(fYmd.format(new Date(tms(t))) === fYmd.format(new Date()) ? fTime.format(new Date(tms(t))) : fDay.format(new Date(tms(t)))) : ''}</span><span class="lk ${k}">${esc(kind)}</span><span class="lm" title="${esc(m)}">${esc(m)}</span></div>`).join('') : '<div class="empty">Loading…</div>'}</div>`;
-  $('#s2-biz').innerHTML = `<div class="ph"><h3>Business<small>after launch</small></h3><span class="soon">Coming after launch</span></div>
-   <p class="mutedt" style="font-size:14px">Etsy sales, profit, ads and email appear here after Calo launches. Nothing is connected yet.</p>
-   <div class="bk">${['Sales', 'Profit', 'Ads', 'Email'].map((k) => `<div class="future"><div class="label">${k}</div><div class="big dimt">—</div></div>`).join('')}</div>`;
+  patch($('#s2-logs'), `<div class="ph"><h3>Activity log<small>GitHub · Calo · team</small></h3><span class="meta">Halifax time</span></div>
+   <div class="scroll s2list">${ev.length ? ev.slice(0, 14).map(([t, k, kind, m]) => `<div class="lg"><span class="lt">${tms(t) ? esc(fYmd.format(new Date(tms(t))) === fYmd.format(new Date()) ? fTime.format(new Date(tms(t))) : fDay.format(new Date(tms(t)))) : ''}</span><span class="lk ${k}">${esc(kind)}</span><span class="lm" title="${esc(m)}">${esc(m)}</span></div>`).join('') : '<div class="empty">Loading…</div>'}</div>`);
+  patch($('#s2-biz'), `<div class="ph"><h3>Business<small>after launch</small></h3><span class="soon">Coming after launch</span></div>
+   <p class="mutedt" style="font-size:0.875rem">Etsy sales, profit, ads and email appear here after Calo launches. Nothing is connected yet.</p>
+   <div class="bk">${['Sales', 'Profit', 'Ads', 'Email'].map((k) => `<div class="future"><div class="label">${k}</div><div class="big dimt">—</div></div>`).join('')}</div>`);
   const bl = $('#s2-baylbl'); if (bl) bl.textContent = `Calo${state.calo.version ? ' v' + state.calo.version : ''} · phone + guide preview`;
   updatePeer();
 }
@@ -708,11 +766,196 @@ if (N3) {
   });
   document.addEventListener('nova:focus', (e) => fillFocus(e.detail.area, e.detail.body));
   document.addEventListener('nova:agent-select', (e) => openAgent(e.detail.index));
-  document.addEventListener('nova:layout', () => { if (n3d.shown) render(); });
+  document.addEventListener('nova:layout', (e) => { wideSplit(); if (n3d.shown) render(); if (e.detail.layout === 'wide') wideTip(); });
   window.addEventListener('hashchange', () => { if (N3.state.focus) N3.back(); });
   setInterval(updatePeer, 2000);
   setInterval(() => { const t = $('[data-topclock2]'); if (t) { const c = clockParts(); t.textContent = `${c.date.toUpperCase()} · ${c.hm} ${c.ap} ${c.zone}`; } }, 1000);
 }
+
+// ---------- screens: Full screen, Screen 2, Place on other monitor, Settings ----------
+const PREFS_KEY = 'nova.prefs', AUTO_KEY = 'nova.perf.auto';
+const prefs = () => Object.assign({ perf: 'auto', glass: false, fps: false, wide: 'auto' }, lsGet(PREFS_KEY) || {});
+const isFs = () => !!document.fullscreenElement;
+const canPlace = () => 'getScreenDetails' in window;
+let screenSD = null; // ScreenDetails once the browser has allowed window management
+let s2win = null;
+function fsButton() {
+  const on = isFs();
+  return `<button class="lockbtn fsbtn" data-fullscreen title="${on ? 'Leave full screen (Esc)' : 'Fill this monitor: hides the browser bars (same as F11)'}">${ic(on ? 'exitfull' : 'full', 16, 'currentColor', 2)}<span class="lt">${on ? 'Exit full screen' : 'Full screen'}</span></button>`;
+}
+function fpsTag() {
+  if (!prefs().fps || !N3) return '';
+  const s = N3.state; return `<span class="fpsread" data-fps>${fpsText(s)}</span>`;
+}
+const MODE_NAME = { smooth: 'Smooth', full: 'Full effects', minimal: 'Minimal' };
+function fpsText(s) { return `${s.fps} fps · ${MODE_NAME[s.mode] || s.mode}${s.lowDpr ? ' · 1x' : ''}`; }
+async function toggleFs() {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+  } catch (e) { toast(`<div><b>Full screen didn’t start</b><div class="mutedt sm">Press <kbd class="k">F11</kbd> instead. It does the same thing.</div></div>`, 8000); }
+}
+document.addEventListener('fullscreenchange', () => {
+  document.documentElement.classList.toggle('is-fs', isFs());
+  if (isFs()) { lsSet('nova.tip.fs.' + (SCREEN2 ? 2 : 1), 1); hideToast('fs'); }
+  if ($('#lock').hidden) render();
+  wideSplit();
+});
+function s2url() { const u = new URL(location.href); u.hash = ''; u.searchParams.set('screen', '2'); return u.href; }
+async function screenDetails(ask) {
+  if (!canPlace()) return null;
+  try {
+    if (!ask) { const st = await navigator.permissions.query({ name: 'window-management' }).catch(() => null); if (!st || st.state !== 'granted') return null; }
+    screenSD = await window.getScreenDetails();
+    screenSD.onscreenschange = () => wideSplit();
+    return screenSD;
+  } catch (e) { return null; }
+}
+const inside = (s, p) => p.x >= s.left && p.x < s.left + s.width && p.y >= s.top && p.y < s.top + s.height;
+const winCentre = () => ({ x: window.screenX + window.outerWidth / 2, y: window.screenY + window.outerHeight / 2 });
+// the monitor that isn't showing `avoid` (screen 1's window); falls back to any screen but this one
+function otherScreen(sd, avoid) {
+  const list = (sd && sd.screens) || []; if (list.length < 2) return null;
+  return (avoid && list.find((s) => !inside(s, avoid))) || list.find((s) => s !== sd.currentScreen) || null;
+}
+const placeFeat = (s) => `popup,left=${s.availLeft},top=${s.availTop},width=${s.availWidth},height=${s.availHeight}`;
+function openScreen2() {
+  const o = screenSD && otherScreen(screenSD, winCentre());
+  const feat = o ? placeFeat(o) : `popup,width=${Math.round(Math.min(1600, screen.availWidth * 0.8))},height=${Math.round(Math.min(900, screen.availHeight * 0.8))}`;
+  s2win = window.open(s2url(), 'nova-screen-2', feat);
+  if (!s2win) { toast(`<div><b>Your browser blocked the new window</b><div class="mutedt sm">Allow pop-ups for this site (icon at the right of the address bar), then click Screen 2 again.</div></div>`, 10000); return; }
+  if (o) { chan.postMessage({ t: 'fs-ask' }); toast(`<div><b>Screen 2 opened on your other monitor</b><div class="mutedt sm">Click it once to make it full screen.</div></div>`, 8000); return; }
+  toast(`<div><b>Screen 2 is open</b><div class="mutedt sm">${canPlace() ? 'Click <b>Place on other monitor</b>, or drag' : 'Drag'} the new window onto your other monitor, then click <b>Full screen</b> on it.</div></div>
+   ${canPlace() ? '<button class="btn" data-place>Place on other monitor</button>' : ''}`, 20000, 's2');
+}
+// screen 1: move the Screen 2 window to the other monitor; screen 2: go full screen on the other monitor
+async function placeOnOther() {
+  const sd = await screenDetails(true);
+  if (!sd) { toast(`<div><b>Couldn’t reach your monitors</b><div class="mutedt sm">Allow “Window management” when Chrome or Edge asks, or drag the window over and click Full screen.</div></div>`, 10000); return; }
+  if (sd.screens.length < 2) { toast(`<div><b>Only one monitor found</b><div class="mutedt sm">On Windows press <kbd class="k">Win</kbd>+<kbd class="k">P</kbd> and pick <b>Extend</b>, then try again.</div></div>`, 12000); return; }
+  if (SCREEN2) {
+    const o = otherScreen(sd, peerCentre) || sd.currentScreen;
+    try { await document.documentElement.requestFullscreen({ screen: o, navigationUI: 'hide' }); }
+    catch (e) { toast(`<div><b>One more click</b><div class="mutedt sm">Chrome needs a fresh click after the permission prompt.</div></div><button class="btn" data-place>Place on other monitor</button>`, 15000, 'place'); }
+    return;
+  }
+  const o = otherScreen(sd, winCentre());
+  if (!s2win || s2win.closed) { s2win = window.open(s2url(), 'nova-screen-2', placeFeat(o)); if (!s2win) { toast(`<div><b>Almost there</b><div class="mutedt sm">Click to open Screen 2 on your other monitor.</div></div><button class="btn" data-screen2>Open Screen 2</button>`, 15000, 's2'); return; } }
+  else { try { s2win.moveTo(o.availLeft, o.availTop); s2win.resizeTo(o.availWidth, o.availHeight); } catch (e) {} }
+  chan.postMessage({ t: 'fs-ask' });
+  toast(`<div><b>Screen 2 is on your other monitor</b><div class="mutedt sm">Click it once to make it full screen.</div></div>`, 8000, 's2');
+}
+// screens talk over a BroadcastChannel: screen 1 says where it is, screen 2 offers a one-click full screen
+const chan = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('nova-screens') : { postMessage() {}, set onmessage(f) {} };
+let peerCentre = null;
+chan.onmessage = (e) => {
+  const m = e.data || {};
+  if (m.t === 'where' && !SCREEN2) chan.postMessage({ t: 'here', c: winCentre() });
+  if (m.t === 'here' && SCREEN2) peerCentre = m.c;
+  if (m.t === 'fs-ask' && SCREEN2 && !isFs()) fsAsk();
+  if (m.t === 'prefs') applyPrefs(false);
+};
+if (SCREEN2) chan.postMessage({ t: 'where' });
+function fsAsk() {
+  if ($('#fsask')) return;
+  document.body.insertAdjacentHTML('beforeend', `<div class="nmodal" id="fsask"><div class="panel mbox" style="text-align:center;width:min(30rem,100%)"><h3 class="ph" style="justify-content:center"><span style="font-family:var(--font-hd);letter-spacing:.14em;text-transform:uppercase;color:var(--acc2)">Screen 2</span></h3>
+   <p class="mutedt" style="margin-bottom:1rem">Click below to fill this monitor.</p><button class="btn" data-fsgo style="font-size:1.2rem;padding:.9rem 1.6rem">${ic('full', 18, 'currentColor', 2)} Full screen</button>
+   <div style="margin-top:.8rem"><button class="lnkbtn" data-fsno>Not now</button></div></div></div>`);
+}
+function screenClicks(e) {
+  const t = e.target.closest('[data-fullscreen],[data-place],[data-settings],[data-fsgo],[data-fsno],[data-tipx],[data-pref],[data-perfretry],[data-twowin]');
+  if (!t) return;
+  if (t.hasAttribute('data-fullscreen')) toggleFs();
+  else if (t.hasAttribute('data-place')) { hideToast(); placeOnOther(); }
+  else if (t.hasAttribute('data-settings')) openSettings();
+  else if (t.hasAttribute('data-fsgo')) { $('#fsask') && $('#fsask').remove(); toggleFs(); }
+  else if (t.hasAttribute('data-fsno')) { $('#fsask') && $('#fsask').remove(); }
+  else if (t.hasAttribute('data-tipx')) hideToast();
+  else if (t.hasAttribute('data-perfretry')) { localStorage.removeItem(AUTO_KEY); if (N3) N3.setMode('smooth', { auto: true, lowDpr: false }); openSettings(); }
+  else if (t.hasAttribute('data-twowin')) { setPref({ wide: 'off' }); hideToast(); openScreen2(); }
+}
+document.addEventListener('change', (e) => { const t = e.target.closest('[data-pref]'); if (!t) return; const k = t.getAttribute('data-pref'); setPref({ [k]: t.type === 'checkbox' ? t.checked : t.value }); });
+function setPref(p) {
+  const next = Object.assign(prefs(), p); lsSet(PREFS_KEY, next);
+  if (p.perf) localStorage.removeItem(AUTO_KEY);
+  applyPrefs(true); chan.postMessage({ t: 'prefs' });
+  if ($('#modal .settings')) openSettings();
+}
+function applyPrefs(local) {
+  const p = prefs(), root = document.documentElement;
+  root.classList.toggle('glass', !!p.glass);
+  if (N3) {
+    if (p.perf === 'auto') { const a = lsGet(AUTO_KEY); if (!local || N3.state.modeAuto === false) N3.setMode(a && a.mode ? a.mode : 'smooth', { auto: true, lowDpr: !!(a && a.lowDpr) }); }
+    else N3.setMode(p.perf, { auto: false });
+    N3.setWide(p.wide);
+  }
+  if ($('#lock').hidden) render();
+}
+window.addEventListener('storage', (e) => { if (e.key === PREFS_KEY) applyPrefs(false); });
+function openSettings() {
+  const p = prefs(), s = N3 ? N3.state : null, auto = lsGet(AUTO_KEY);
+  const opt = (name, val, cur, title, desc) => `<label class="opt ${cur === val ? 'on' : ''}"><input type="radio" name="${name}" value="${val}" data-pref="${name}" ${cur === val ? 'checked' : ''}><div><b>${title}</b><div class="mutedt sm">${desc}</div></div></label>`;
+  const chk = (key, title, desc) => `<label class="opt ${p[key] ? 'on' : ''}"><input type="checkbox" data-pref="${key}" ${p[key] ? 'checked' : ''}><div><b>${title}</b><div class="mutedt sm">${desc}</div></div></label>`;
+  const now = s ? `Right now: ${MODE_NAME[s.mode]}${s.lowDpr ? ' at 1x resolution' : ''} · ${s.fps} fps drawn${s.busyFps ? ` · ${s.busyFps} fps while moving` : ''}` : '3D is off on this device';
+  const dropped = p.perf === 'auto' && auto && auto.mode === 'minimal';
+  document.getElementById('modal') || document.body.insertAdjacentHTML('beforeend', '<div id="modal"></div>');
+  $('#modal').innerHTML = `<div class="nmodal" data-mclose><div class="panel mbox settings" role="dialog" aria-modal="true" aria-label="Settings">
+   <div class="ph"><h3>Settings<small>this device</small></h3><button class="x" data-mclose aria-label="Close">✕</button></div>
+   <div class="sgroup"><div class="label">Performance</div>
+    ${opt('perf', 'auto', p.perf, 'Smooth (recommended)', 'Lighter glow, full speed only while you move things. Switches itself to Minimal if your computer struggles.')}
+    ${opt('perf', 'full', p.perf, 'Full effects', 'Bloom glow, sharper edges, faster idle animation. Needs a strong graphics card.')}
+    ${opt('perf', 'minimal', p.perf, 'Minimal', 'No 3D background and a still core. The lightest option.')}
+    <div class="mutedt sm" style="margin-top:.5rem">${esc(now)}${dropped ? ' · <button class="lnkbtn" data-perfretry>Try Smooth again</button>' : ''}</div>
+    ${chk('glass', 'Frosted glass blur', 'Blurs the 3D scene behind every panel. Looks nice, but it’s the slowest effect.')}
+    ${chk('fps', 'Show frame rate', 'Adds a small fps counter to the top bar.')}
+   </div>
+   <div class="sgroup"><div class="label">Two screens</div>
+    <ol class="steps"><li>Use NOVA on your monitor and click <b>Screen 2</b>.</li><li>${canPlace() ? 'Click <b>Place on other monitor</b> (allow “Window management” once), or drag' : 'Drag'} the new window onto your laptop screen.</li><li>Click <b>Full screen</b> on each window (or press <kbd class="k">F11</kbd>).</li></ol>
+    <div class="btns">${SCREEN2 ? '' : '<button class="btn sm" data-screen2>Open Screen 2</button>'}${canPlace() ? '<button class="btn sm" data-place>Place on other monitor</button>' : ''}<button class="btn sm" data-fullscreen>${isFs() ? 'Exit full screen' : 'Full screen'}</button></div>
+    ${opt('wide', 'auto', p.wide, 'Separate windows (recommended)', 'Each window fits its own screen. The stretched layout only turns on if one window really spans both monitors.')}
+    ${opt('wide', 'off', p.wide, 'Never stretch', 'Always the normal layout, even in one very wide window.')}
+    ${opt('wide', 'on', p.wide, 'Stretched across both', 'One window, screen 2 on the right half. Fits badly when the screens differ in size or height.')}
+   </div>
+   <div class="btns" style="margin-top:1rem"><button class="btn" data-mclose>Done</button></div></div></div>`;
+}
+// toasts
+let toastTm = 0;
+function toast(html, ms = 9000, id = '') {
+  hideToast();
+  document.body.insertAdjacentHTML('beforeend', `<div class="ntoast" id="ntoast" role="status" data-id="${id}">${html}<button class="x" data-tipx aria-label="Dismiss">✕</button></div>`);
+  clearTimeout(toastTm); if (ms) toastTm = setTimeout(hideToast, ms);
+}
+function hideToast(id) { const t = $('#ntoast'); if (t && (!id || t.dataset.id === id)) t.remove(); }
+function firstTips() {
+  const k = 'nova.tip.fs.' + (SCREEN2 ? 2 : 1);
+  if (isFs() || lsGet(k)) return;
+  lsSet(k, 1);
+  toast(`<div><b>Tip</b> <span class="mutedt">Press <kbd class="k">F11</kbd> or click <b>Full screen</b> to hide the browser bars.${SCREEN2 ? '' : ' Two monitors? Click <b>Screen 2</b> to open the second window.'}</span></div><button class="btn" data-fullscreen>Full screen</button>`, 14000, 'fs');
+}
+function wideTip() {
+  if (lsGet('nova.tip.wide')) return; lsSet('nova.tip.wide', 1);
+  toast(`<div><b>Stretched over two screens</b><div class="mutedt sm">NOVA fits much better as two windows, one per monitor.</div></div><button class="btn" data-twowin>Use two windows</button>`, 20000, 'wide');
+}
+// stretched mode: split where the monitors actually meet instead of assuming two equal halves
+function wideSplit() {
+  const root = document.documentElement;
+  if (root.getAttribute('data-n3d-layout') !== 'wide' || SCREEN2) { root.style.removeProperty('--split-a'); return; }
+  const vx = window.screenX + Math.max(0, (window.outerWidth - window.innerWidth) / 2);
+  let edge = null;
+  if (screenSD && screenSD.screens) { const first = screenSD.screens.find((s) => vx >= s.left && vx < s.left + s.width); if (first) edge = first.left + first.width - vx; }
+  else if (window.screen) { const sl = screen.availLeft ?? 0; edge = vx >= sl ? sl + screen.width - vx : sl - vx; }
+  if (edge && edge > innerWidth * 0.25 && edge < innerWidth * 0.75) root.style.setProperty('--split-a', Math.round(edge) + 'px'); else root.style.removeProperty('--split-a');
+}
+window.addEventListener('resize', wideSplit);
+if (N3) {
+  document.addEventListener('nova:perf', (e) => {
+    const d = e.detail;
+    if (d.auto) lsSet(AUTO_KEY, { mode: d.mode, lowDpr: d.lowDpr });
+    if (d.reason === 'minimal') toast(`<div><b>Switched to Minimal effects</b><div class="mutedt sm">The 3D scene was running at ${d.fps} fps on this computer, so NOVA turned it down to stay smooth.</div></div><button class="btn" data-settings>Settings</button>`, 15000, 'perf');
+  });
+  setInterval(() => { const f = $('[data-fps]'); if (f) f.textContent = fpsText(N3.state); }, 1000);
+}
+screenDetails(false).then(() => wideSplit()); // no prompt: only if already allowed
 
 // ---------- lock / unlock ----------
 let timers = [];
@@ -729,12 +972,13 @@ function onVis() { if (document.visibilityState === 'visible') { refreshGitHub()
 function lock(msg) {
   n3d.shown = false; apiLogout(); if ($('#modal')) $('#modal').innerHTML = '';
   localStorage.removeItem(LS.pass); keyCache.clear(); state.status = null; stopLive(); reset3D();
-  $('#view').innerHTML = ''; $('#sheet').innerHTML = ''; ['#s2-feed', '#s2-logs'].forEach((k) => { if ($(k)) $(k).innerHTML = ''; });
+  $('#view').innerHTML = ''; $('#sheet').innerHTML = ''; ['#view', '#s2-feed', '#s2-logs'].forEach((k) => { if ($(k)) { $(k).innerHTML = ''; $(k).__html = ''; } });
+  if (N3) N3.setPaused(true); hideToast();
   $('#lock').hidden = false; $('#screen').setAttribute('aria-hidden', 'true');
   const m = $('#lockmsg'); m.textContent = msg || 'Locked. Enter your passphrase to open NOVA.'; m.className = 'lockmsg' + (msg ? ' err' : '');
   $('#pass').value = ''; setTimeout(() => $('#pass').focus(), 50);
 }
-function showApp() { n3d.shown = true; $('#lock').hidden = true; $('#screen').removeAttribute('aria-hidden'); route(); startLive(); }
+function showApp() { n3d.shown = true; $('#lock').hidden = true; $('#screen').removeAttribute('aria-hidden'); if (N3) N3.setPaused(false); route(); startLive(); setTimeout(firstTips, 1500); }
 $('#lockring').innerHTML = coreRing([{ state: 'ok' }, { state: 'ok' }, { state: 'ok' }], false);
 $('#lockform').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -753,6 +997,7 @@ $('#lockform').addEventListener('submit', async (e) => {
 
 // boot
 if (N3) { try { N3.init(); } catch (e) { console.warn('NOVA 3D unavailable:', e.message); } }
+document.documentElement.classList.toggle('glass', !!prefs().glass);
 setInterval(tick, 1000);
 (async () => {
   const pass = localStorage.getItem(LS.pass);

@@ -124,13 +124,13 @@ export function openConnections() {
    <div class="svc"><span class="dot ${conn.session ? 'ok' : 'warn'}"></span><span class="mutedt sm">${conn.session ? 'Signed in to the NOVA secure service' : esc(conn.err || 'Not signed in to the secure service')}</span></div>
    <div class="clist">${rows}</div>
    ${s ? `<div class="crow ctl"><div class="grow"><b>Remote controls</b><div class="mutedt sm">${off ? 'Off: NOVA can’t send commands to any bot.' : 'On: commands ask you to confirm before sending.'}</div></div><button class="btn sm ${off ? '' : 'danger'}" data-controls="${off ? 'on' : 'off'}">${off ? 'Turn on' : 'Turn off'}</button></div>` : ''}
-   <div class="mutedt sm" style="margin-top:14px">Keys are stored only in the secure service, never in this site. Ask Grok Bot to connect one.</div>
-   <div class="btns" style="margin-top:14px"><button class="btn" data-connrefresh>${conn.loading ? 'Checking…' : 'Check again'}</button><button class="btn" data-mclose>Close</button></div>`, 'conn');
+   <div class="mutedt sm" style="margin-top:0.875rem">Keys are stored only in the secure service, never in this site. Ask Grok Bot to connect one.</div>
+   <div class="btns" style="margin-top:0.875rem"><button class="btn" data-connrefresh>${conn.loading ? 'Checking…' : 'Check again'}</button><button class="btn" data-mclose>Close</button></div>`, 'conn');
 }
 function openReplies() {
   modal(`<div class="ph"><h3>Replies<small>from your bots</small></h3><button class="x" data-mclose aria-label="Close">✕</button></div>
    <div class="clist">${conn.inbox.map((x) => `<div class="crow"><div class="grow"><div class="mutedt sm">${esc(new Date(x.time).toLocaleString('en-US', { timeZone: 'America/Halifax', dateStyle: 'medium', timeStyle: 'short' }))} AT${x.request_id ? ' · ' + esc(String(x.request_id).slice(0, 8)) : ''}</div><div class="rfull">${esc(x.text)}</div></div></div>`).join('') || '<div class="empty">No replies yet.</div>'}</div>
-   <div class="btns" style="margin-top:14px"><button class="btn" data-mclose>Close</button></div>`);
+   <div class="btns" style="margin-top:0.875rem"><button class="btn" data-mclose>Close</button></div>`);
 }
 function reviewCommand() {
   const t = tgt(), text = conn.draft.trim();
@@ -138,20 +138,20 @@ function reviewCommand() {
   if (!isOn(t.integ)) {
     modal(`<div class="ph"><h3>${esc(t.label)}<small>not connected</small></h3><button class="x" data-mclose aria-label="Close">✕</button></div>
      <div class="notconn">${svg(I.plug, 26)}<div><b>Not connected yet</b><div class="mutedt sm">${esc(t.label)} isn’t linked to NOVA yet, so nothing was sent. Ask Grok Bot to connect it, then try again.</div></div></div>
-     <div class="btns" style="margin-top:16px"><button class="btn" data-conn>Connections</button><button class="btn" data-mclose>Close</button></div>`);
+     <div class="btns" style="margin-top:1rem"><button class="btn" data-conn>Connections</button><button class="btn" data-mclose>Close</button></div>`);
     return;
   }
-  if (conn.status && conn.status.controls_off) { modal(`<div class="ph"><h3>Controls are off</h3><button class="x" data-mclose>✕</button></div><div class="mutedt">Turn remote controls back on in Connections to send commands.</div><div class="btns" style="margin-top:16px"><button class="btn" data-conn>Connections</button></div>`); return; }
+  if (conn.status && conn.status.controls_off) { modal(`<div class="ph"><h3>Controls are off</h3><button class="x" data-mclose>✕</button></div><div class="mutedt">Turn remote controls back on in Connections to send commands.</div><div class="btns" style="margin-top:1rem"><button class="btn" data-conn>Connections</button></div>`); return; }
   const repos = (conn.status && conn.status.repos) || ['tyler467890/student-day-planner', 'tyler467890/nova'];
   const lim = conn.status && conn.status.limits && conn.status.limits[t.id];
   const what = t.id === 'grok' ? 'This sends the message below to your Grok Bot.' : t.id === 'cursor' ? 'This starts a new Cursor cloud agent that can change code and open a pull request.' : 'This opens a GitHub issue and assigns it to Copilot, which then starts working on it.';
   modal(`<div class="ph"><h3>Confirm<small>${esc(t.label)}</small></h3><button class="x" data-mclose aria-label="Close">✕</button></div>
-   <div class="mutedt" style="margin-bottom:12px">${what}</div>
+   <div class="mutedt" style="margin-bottom:0.75rem">${what}</div>
    ${t.repo ? `<label class="label" for="cmdrepo">Repository</label><select id="cmdrepo" class="msel">${repos.map((r) => `<option ${r === conn.repo ? 'selected' : ''}>${esc(r)}</option>`).join('')}</select>` : ''}
-   <div class="label" style="margin-top:12px">Message</div><div class="quote">${esc(text)}</div>
-   ${lim ? `<div class="mutedt sm" style="margin-top:8px">${lim.used} of ${lim.cap} used today</div>` : ''}
+   <div class="label" style="margin-top:0.75rem">Message</div><div class="quote">${esc(text)}</div>
+   ${lim ? `<div class="mutedt sm" style="margin-top:0.5rem">${lim.used} of ${lim.cap} used today</div>` : ''}
    <div class="cmderr" id="cmderr" role="alert"></div>
-   <div class="btns" style="margin-top:16px"><button class="btn pri" data-cmdconfirm autofocus>Send to ${esc(t.label)}</button><button class="btn" data-mclose>Cancel</button></div>`);
+   <div class="btns" style="margin-top:1rem"><button class="btn pri" data-cmdconfirm autofocus>Send to ${esc(t.label)}</button><button class="btn" data-mclose>Cancel</button></div>`);
 }
 async function sendCommand(btn) {
   const t = tgt(), text = conn.draft.trim();
@@ -164,7 +164,7 @@ async function sendCommand(btn) {
     else { const title = text.split('\n')[0].slice(0, 120); d = await api('/github/issue', { method: 'POST', body: JSON.stringify({ repo: conn.repo, title, body: text, assignCopilot: true }) }); msg = `Issue #${d.number} created${d.copilotAssigned ? ' and assigned to Copilot' : ' (Copilot couldn’t be assigned; check that it’s enabled for this repo)'}.`; d.link = d.url; }
     conn.draft = '';
     const link = safeUrl(d.link || '');
-    modal(`<div class="ph"><h3>Sent<small>${esc(t.label)}</small></h3><button class="x" data-mclose aria-label="Close">✕</button></div><div>${esc(msg)}</div>${link ? `<div class="btns" style="margin-top:14px"><a class="btn" href="${esc(link)}" target="_blank" rel="noopener">Open</a></div>` : ''}<div class="btns" style="margin-top:14px"><button class="btn" data-mclose autofocus>Done</button></div>`);
+    modal(`<div class="ph"><h3>Sent<small>${esc(t.label)}</small></h3><button class="x" data-mclose aria-label="Close">✕</button></div><div>${esc(msg)}</div>${link ? `<div class="btns" style="margin-top:0.875rem"><a class="btn" href="${esc(link)}" target="_blank" rel="noopener">Open</a></div>` : ''}<div class="btns" style="margin-top:0.875rem"><button class="btn" data-mclose autofocus>Done</button></div>`);
     refreshConn();
   } catch (e) {
     const d = e.data || {};
