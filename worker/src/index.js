@@ -6,7 +6,8 @@
 //   GITHUB_TOKEN, CURSOR_API_KEY, GROK_WEBHOOK_URL, GROK_WEBHOOK_KEY, NOTION_TOKEN, NOTION_TASKS_DB (optional integrations)
 
 const SESSION_TTL = 12 * 3600;            // seconds
-const LOGIN_MAX = 5, LOGIN_WINDOW = 900;  // 5 tries per 15 minutes per IP
+const LOGIN_MAX = 5, LOGIN_WINDOW = 900;  // 5 wrong tries per 15 minutes per IP (IPv6: per /48)
+const LOGIN_GLOBAL_MAX = 20;              // and 20 wrong tries per 15 minutes in total, from anywhere
 const INBOX_MAX = 50, AUDIT_MAX = 200;
 const MAX_TEXT = 8000;
 const TZ = 'America/Halifax';
@@ -292,10 +293,10 @@ async function status(env) {
 export class LoginLimiter {
   constructor(state) { this.state = state; }
   async fetch(req) {
-    const op = new URL(req.url).pathname, now = Date.now();
+    const u = new URL(req.url), op = u.pathname, now = Date.now(), max = Number(u.searchParams.get('max')) || LOGIN_MAX;
     let rec = (await this.state.storage.get('r')) || { n: 0, until: 0 };
     if (rec.until <= now) rec = { n: 0, until: 0 };
-    if (op === '/check') return Response.json({ blocked: rec.n >= LOGIN_MAX, retry_after: Math.max(0, Math.ceil((rec.until - now) / 1000)), n: rec.n });
+    if (op === '/check') return Response.json({ blocked: rec.n >= max, retry_after: Math.max(0, Math.ceil((rec.until - now) / 1000)), n: rec.n });
     if (op === '/fail') { if (!rec.until) rec.until = now + LOGIN_WINDOW * 1000; rec.n++; await this.state.storage.put('r', rec); await this.state.storage.setAlarm(rec.until); return Response.json({ n: rec.n }); }
     if (op === '/reset') { await this.state.storage.deleteAll(); return Response.json({ ok: true }); }
     return new Response('not found', { status: 404 });
@@ -304,16 +305,19 @@ export class LoginLimiter {
 }
 async function login(req, env) {
   if (!env.SESSION_KEY) fail(503, 'not_configured', { configured: false, need: 'SESSION_KEY' });
+  // Bucket by IP; IPv6 by /48 so rotating addresses in one network share a bucket.
   const ip = req.headers.get('CF-Connecting-IP') || 'unknown';
-  const lim = env.LOGIN_LIMITER.get(env.LOGIN_LIMITER.idFromName(ip));
-  const call = async (op) => (await lim.fetch('https://limiter/' + op, { method: 'POST' })).json();
-  const st = await call('check');
-  if (st.blocked) throw new HttpError(429, { error: 'too_many_attempts', retry_after: st.retry_after, message: 'Too many tries. Wait a few minutes and try again.' });
+  const bucket = ip.includes(':') ? ip.split(':').slice(0, 3).join(':') + '::/48' : ip;
+  const buckets = [['ip:' + bucket, LOGIN_MAX], ['global', LOGIN_GLOBAL_MAX]];
+  const call = async (name, op, max) => (await env.LOGIN_LIMITER.get(env.LOGIN_LIMITER.idFromName(name)).fetch(`https://limiter/${op}?max=${max}`, { method: 'POST' })).json();
+  const sts = await Promise.all(buckets.map(([n, m]) => call(n, 'check', m)));
+  const blocked = sts.find((x) => x.blocked);
+  if (blocked) throw new HttpError(429, { error: 'too_many_attempts', retry_after: blocked.retry_after, message: 'Too many tries. Wait a few minutes and try again.' });
   const b = await body(req);
   const pass = typeof b.passphrase === 'string' ? b.passphrase : '';
   const ok = pass.length > 0 && pass.length <= 256 && await checkPassphrase(pass, env.NOVA_PASSPHRASE_HASH);
-  if (!ok) { const r = await call('fail'); fail(401, 'wrong_passphrase', { tries_left: Math.max(0, LOGIN_MAX - r.n) }); }
-  if (st.n) await call('reset');
+  if (!ok) { const rs = await Promise.all(buckets.map(([n, m]) => call(n, 'fail', m))); fail(401, 'wrong_passphrase', { tries_left: Math.max(0, Math.min(...rs.map((r, i) => buckets[i][1] - r.n))) }); }
+  if (sts[0].n) await call(buckets[0][0], 'reset', LOGIN_MAX);
   return makeSession(env);
 }
 

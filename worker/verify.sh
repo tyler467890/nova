@@ -17,7 +17,7 @@ echo "status bad token: $(code -H 'Authorization: Bearer abc.def' $U/status)"
 echo "status: $(code -H "Authorization: Bearer $TOK" $U/status) $(cat /tmp/nv.out)"
 echo "inbox: $(code -H "Authorization: Bearer $TOK" $U/inbox) $(cat /tmp/nv.out)"
 echo "grok cmd (unconfigured): $(code -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' -d '{"text":"hi"}' $U/grok/command) $(cat /tmp/nv.out)"
-echo "cursor (unconfigured): $(code -H "Authorization: Bearer $TOK" $U/cursor/agents) $(cat /tmp/nv.out)"
+echo "cursor agents: $(code -H "Authorization: Bearer $TOK" $U/cursor/agents) $(cat /tmp/nv.out)"
 echo "github bad repo: $(code -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' -d '{"repo":"evil/x","title":"t"}' $U/github/issue) $(cat /tmp/nv.out)"
 echo "notion (unconfigured): $(code -H "Authorization: Bearer $TOK" $U/notion/tasks) $(cat /tmp/nv.out)"
 echo "preflight NOVA origin:"; curl -s -o /dev/null -D - -X OPTIONS -H "Origin: $O" -H 'Access-Control-Request-Method: POST' -H 'Access-Control-Request-Headers: authorization,content-type' $U/status | grep -iE '^(HTTP|access-control)'
