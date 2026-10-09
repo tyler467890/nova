@@ -3,7 +3,7 @@
 Cloudflare Worker that is NOVA's secure backend: https://nova-api.tyler467890.workers.dev
 
 - All integration keys live here as Worker secrets. The NOVA site holds none.
-- `POST /auth/login {passphrase}` → 12-hour HMAC-signed session token (rate-limited: 5 tries / 15 min per IP).
+- `POST /auth/login {passphrase}` → 12-hour HMAC-signed session token (rate-limited in a Durable Object: 5 wrong tries / 15 min per IP).
 - Everything else needs `Authorization: Bearer <session token>`; integrations that aren't set up return
   `503 {configured:false, need:"<SECRET>"}`.
 - Write routes (`/github/issue`, `/cursor/agents`, `/cursor/agents/:id/followup`, `/grok/command`) are logged to `GET /audit`,

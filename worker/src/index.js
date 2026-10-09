@@ -288,26 +288,32 @@ async function status(env) {
 }
 
 // ---------- login ----------
+// Login attempts are counted in a Durable Object per IP (strongly consistent, unlike KV).
+export class LoginLimiter {
+  constructor(state) { this.state = state; }
+  async fetch(req) {
+    const op = new URL(req.url).pathname, now = Date.now();
+    let rec = (await this.state.storage.get('r')) || { n: 0, until: 0 };
+    if (rec.until <= now) rec = { n: 0, until: 0 };
+    if (op === '/check') return Response.json({ blocked: rec.n >= LOGIN_MAX, retry_after: Math.max(0, Math.ceil((rec.until - now) / 1000)), n: rec.n });
+    if (op === '/fail') { if (!rec.until) rec.until = now + LOGIN_WINDOW * 1000; rec.n++; await this.state.storage.put('r', rec); await this.state.storage.setAlarm(rec.until); return Response.json({ n: rec.n }); }
+    if (op === '/reset') { await this.state.storage.deleteAll(); return Response.json({ ok: true }); }
+    return new Response('not found', { status: 404 });
+  }
+  async alarm() { await this.state.storage.deleteAll(); }
+}
 async function login(req, env) {
   if (!env.SESSION_KEY) fail(503, 'not_configured', { configured: false, need: 'SESSION_KEY' });
   const ip = req.headers.get('CF-Connecting-IP') || 'unknown';
-  const key = 'rl:login:' + ip;
-  const rec = await kvJson(env, key, null);
-  const now = Date.now();
-  const tries = rec && rec.until > now ? rec.n : 0;
-  if (tries >= LOGIN_MAX) {
-    const wait = Math.ceil((rec.until - now) / 1000);
-    throw new HttpError(429, { error: 'too_many_attempts', retry_after: wait, message: 'Too many tries. Wait a few minutes and try again.' });
-  }
+  const lim = env.LOGIN_LIMITER.get(env.LOGIN_LIMITER.idFromName(ip));
+  const call = async (op) => (await lim.fetch('https://limiter/' + op, { method: 'POST' })).json();
+  const st = await call('check');
+  if (st.blocked) throw new HttpError(429, { error: 'too_many_attempts', retry_after: st.retry_after, message: 'Too many tries. Wait a few minutes and try again.' });
   const b = await body(req);
   const pass = typeof b.passphrase === 'string' ? b.passphrase : '';
   const ok = pass.length > 0 && pass.length <= 256 && await checkPassphrase(pass, env.NOVA_PASSPHRASE_HASH);
-  if (!ok) {
-    const until = rec && rec.until > now ? rec.until : now + LOGIN_WINDOW * 1000;
-    await env.NOVA_KV.put(key, JSON.stringify({ n: tries + 1, until }), { expirationTtl: Math.max(60, Math.ceil((until - now) / 1000)) });
-    fail(401, 'wrong_passphrase', { tries_left: Math.max(0, LOGIN_MAX - tries - 1) });
-  }
-  if (rec) await env.NOVA_KV.delete(key);
+  if (!ok) { const r = await call('fail'); fail(401, 'wrong_passphrase', { tries_left: Math.max(0, LOGIN_MAX - r.n) }); }
+  if (st.n) await call('reset');
   return makeSession(env);
 }
 

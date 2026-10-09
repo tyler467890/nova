@@ -20,7 +20,7 @@ const pass=fs.readFileSync('/home/box/.nova/passphrase','utf8').trim();
   s.sessionStored=await p.evaluate(()=>!!sessionStorage.getItem('nova.api.session'));
   s.sessionNotInLocal=await p.evaluate(()=>!Object.keys(localStorage).some(k=>k.includes('api.session')));
   s.integrations=await p.evaluate(()=>Object.fromEntries(Object.entries(window.NOVA.conn.status.integrations).map(([k,v])=>[k,v.configured])));
-  s.replies=await p.evaluate(()=>[...document.querySelectorAll('.replies .rp')].map(e=>e.textContent.trim()));
+  s.replies=await p.evaluate(()=>[...document.querySelectorAll('.replies .rx')].map(e=>e.textContent.trim()));
   await p.screenshot({path:`${out}/${tag}-${name}-overview.png`,fullPage:mobile});
   await p.selectOption('#cmdtarget','cursor');await p.waitForTimeout(300);
   s.barNoteCursor=await p.evaluate(()=>{const n=document.querySelector('.cmdnote');return n?n.textContent:'(hidden on phone)'});
