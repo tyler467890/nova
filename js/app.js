@@ -2,6 +2,8 @@
 // Private data lives only in data/status.enc.json (AES-GCM, PBKDF2-SHA256 key from a passphrase).
 // Live data: public GitHub REST API (no token) and the public Calo site.
 
+import { cmdBar, repliesStrip, apiLogin, apiLogout, refreshConn, openConnections, conn } from './connect.js';
+
 const REPO = 'tyler467890/student-day-planner';
 const CALO = 'https://tyler467890.github.io/student-day-planner/';
 const TZ = 'America/Halifax';
@@ -24,7 +26,7 @@ const state = {
   gh: lsGet(LS.gh) || { cache: {}, prs: null, run: null, commit: null, fetchedAt: 0, error: '', rateResetAt: 0 },
   calo: lsGet(LS.calo) || { checkedAt: 0, online: null },
 };
-window.NOVA = { state, version: '1.0.0' }; // read-only hook for add-on layers (e.g. a 3D renderer)
+window.NOVA = { state, conn, version: '1.1.0' }; // read-only hook for add-on layers (e.g. a 3D renderer)
 const emit = (name, detail) => window.dispatchEvent(new CustomEvent('nova:' + name, { detail }));
 
 // ---------- time ----------
@@ -273,12 +275,7 @@ function futureCards() {
   <a class="panel fut" href="#business" title="Preview of how this looks after launch"><div class="future fx">${ic(i, 30)}<div><div class="ft">${t}</div><div class="mutedt sm">${s}</div></div></div>
    <div class="fb"><span class="soon">Coming after launch</span><svg class="future spark" width="120" height="30" viewBox="0 0 120 30" fill="none" aria-hidden="true"><path d="M2 26 L20 20 L38 22 L56 14 L74 16 L92 8 L118 3" stroke="var(--acc)" stroke-width="1.5" stroke-dasharray="4 4"/></svg></div></a>`).join('');
 }
-function askBar(short) {
-  const link = safeUrl(GROK_APP_URL);
-  const inner = `${ic('bolt', short ? 18 : 22)}<span class="ph2"><span class="long">Ask your team…  e.g. “What’s left before the Etsy launch?”</span><span class="short">Ask your team…</span></span><span class="mic">${ic('mic', short ? 18 : 22)}</span>`;
-  return link ? `<a class="cmd" href="${esc(link)}" target="_blank" rel="noopener">${inner}</a>`
-    : `<button class="cmd" type="button" data-ask aria-describedby="asktip">${inner}<span class="tip" id="asktip" role="tooltip">Coming soon: chat from NOVA</span></button>`;
-}
+function askBar(short) { return cmdBar(short) + repliesStrip(); }
 function needPanel() {
   const n = agents().filter((a) => a.status === 'needs_you');
   if (!n.length) return '';
@@ -362,7 +359,7 @@ function viewAgents() {
     </div>
     <div class="panel" style="flex:1;min-height:0"><div class="ph"><h3>Recent updates</h3></div>
      ${updates().map((u) => `<div class="row"><span class="dot"></span><div class="grow"><b style="font-weight:600">${esc(u.title)}</b><div class="mutedt sm">${esc(dayLabel(u.time))}</div></div></div>`).join('') || '<div class="empty">No updates yet</div>'}
-     <div class="nolog" style="margin-top:18px">${ic('users', 22)}<div>Chatting with agents from NOVA is coming soon. Use the Grok Bot app for now.</div></div>
+     <div class="nolog" style="margin-top:18px">${ic('users', 22)}<div>Send commands to Grok Bot, Cursor or Copilot from the Ask bar on the Overview. Replies show under it.</div></div>
     </div>
    </section>
   </div>`;
@@ -426,14 +423,17 @@ function renderTop() {
    <nav class="nav">${VIEWS.map(([k, l]) => `<a href="#${k}" class="${state.view === k ? 'on' : ''}">${l}</a>`).join('')}</nav>
    <div class="tright"><span class="pill ${sys.issues.length ? 'warn' : ''}" title="${esc(sys.issues.join(', ') || 'Calo online, deploy OK, team feed decrypted')}"><span class="dot ${sys.issues.length ? 'warn' : 'ok'}"></span>${sys.issues.length ? sys.issues.length + (sys.issues.length === 1 ? ' issue' : ' issues') : 'All systems normal'}</span>
     <span class="clk" data-topclock>${esc(c.date.toUpperCase())} · ${esc(c.hm)} ${esc(c.ap)} ${esc(c.zone)}</span>
+    <button class="lockbtn connbtn" data-conn title="Connections: which tools are linked to NOVA">${ic('bolt', 15, 'currentColor')}<span class="lt">Connections</span></button>
     <button class="lockbtn" data-lock title="Lock NOVA and forget the passphrase on this device">${ic('lock', 15, 'currentColor')}<span class="lt">Lock</span></button><div class="avatar" title="Tyler Fennell">TF</div></div>`;
   $('#tabs').innerHTML = VIEWS.map(([k, , i, l]) => `<a class="tab ${state.view === k ? 'on' : ''}" href="#${k}">${ic(i, 24, state.view === k ? 'var(--acc)' : 'var(--muted)')}<span>${l}</span></a>`).join('');
 }
 function render() {
+  const fa = document.activeElement, keep = fa && fa.id === 'cmdtext' ? [fa.selectionStart, fa.selectionEnd] : null;
   renderTop();
   const v = state.view;
   $('#view').innerHTML = v === 'agents' ? viewAgents() : v === 'calo' ? viewCalo() : v === 'business' ? viewBusiness() : viewOverview();
   document.title = 'NOVA · ' + (VIEWS.find((x) => x[0] === v) || VIEWS[0])[1];
+  if (keep && $('#cmdtext')) { const x = $('#cmdtext'); x.focus(); try { x.setSelectionRange(keep[0], keep[1]); } catch {} }
   emit('render', { view: v });
 }
 function tick() {
@@ -569,11 +569,13 @@ function startLive() {
   refreshGitHub(); checkCalo();
   timers.push(setInterval(() => { refreshGitHub(); checkCalo(); refreshStatus(); }, REFRESH_MS));
   timers.push(setInterval(tickAgo, 30000));
+  timers.push(setInterval(() => { if (document.visibilityState === 'visible') refreshConn(); }, 90000));
   document.addEventListener('visibilitychange', onVis);
 }
 function stopLive() { timers.forEach(clearInterval); timers = []; document.removeEventListener('visibilitychange', onVis); }
 function onVis() { if (document.visibilityState === 'visible') { refreshGitHub(); checkCalo(); if (Date.now() - state.statusLoadedAt > 60000) refreshStatus(); } }
 function lock(msg) {
+  apiLogout(); if ($('#modal')) $('#modal').innerHTML = '';
   localStorage.removeItem(LS.pass); keyCache.clear(); state.status = null; stopLive();
   $('#view').innerHTML = ''; $('#sheet').innerHTML = '';
   $('#lock').hidden = false; $('#screen').setAttribute('aria-hidden', 'true');
@@ -590,6 +592,7 @@ $('#lockform').addEventListener('submit', async (e) => {
   try {
     state.status = await fetchStatus(pass); state.statusErr = ''; state.statusLoadedAt = Date.now();
     localStorage.setItem(LS.pass, pass); m.textContent = ''; showApp();
+    apiLogin(pass).then(refreshConn); // silent sign-in to the secure service (nova-api)
   } catch (err) {
     m.className = 'lockmsg err';
     m.textContent = err instanceof WrongPass ? 'That passphrase didn’t work. Check the words and dashes.' : 'Couldn’t reach the status file. Check your connection.';
@@ -602,7 +605,9 @@ setInterval(tick, 1000);
   const pass = localStorage.getItem(LS.pass);
   if (!pass) { lock(); $('#lockmsg').className = 'lockmsg'; $('#lockmsg').textContent = 'Remembered on this device until you press Lock.'; return; }
   showApp();
+  refreshConn();
   await refreshStatus();
 })();
+window.addEventListener('nova:conn', () => { if ($('#lock').hidden) render(); });
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW', e.message)));

@@ -1,0 +1,15 @@
+{
+  "name": "nova-api",
+  "version": "1.0.0",
+  "description": "Secure backend Worker for the NOVA dashboard",
+  "main": "index.js",
+  "scripts": {
+    "deploy": "wrangler deploy", "verify": "./verify.sh"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "wrangler": "^4.149.0"
+  }
+}

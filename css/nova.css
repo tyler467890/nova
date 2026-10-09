@@ -396,3 +396,54 @@ main.view{perspective:1800px;perspective-origin:50% 40%}
 }
 .calo .kv{flex-wrap:nowrap;gap:22px}
 .calo .kv .big.soonv{font-size:12px;letter-spacing:.1em;white-space:nowrap}
+
+/* ---------- Connections, command bar, replies (nova-api) ---------- */
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.cmdbar{gap:10px;padding:0 8px 0 18px;position:relative}
+.cmdbar .cmdic{color:var(--acc);display:grid;place-items:center;flex:none}
+.cmdtarget{appearance:none;-webkit-appearance:none;flex:none;font-family:var(--font-mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--acc2);
+  background:rgba(var(--a),.10) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0 L5 6 L10 0' fill='%2340d6ff'/></svg>") no-repeat right 10px center;
+  border:1px solid rgba(var(--a),.45);border-radius:16px;padding:7px 28px 7px 12px;cursor:pointer}
+.cmdtarget:focus-visible,.cmdtext:focus-visible{outline:1px solid var(--acc);outline-offset:2px}
+.cmdtarget option{background:#071522;color:var(--text)}
+.cmdtext{flex:1;min-width:0;background:none;border:0;color:var(--text);font:inherit;font-size:17px}
+.cmdtext::placeholder{color:var(--muted)}
+.cmdtext:focus{outline:none}
+.cmdnote{flex:none;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);border:1px dashed rgba(var(--a),.35);padding:4px 8px;border-radius:3px;white-space:nowrap;cursor:pointer}
+.cmdnote.off{color:rgb(var(--warn));border-color:rgba(var(--warn),.5)}
+.cmdsend{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;flex:none;color:var(--acc);background:rgba(var(--a),.16);border:1px solid var(--acc);box-shadow:0 0 14px rgba(var(--a),.5)}
+.cmdsend:hover{background:rgba(var(--a),.28)}
+.replies{width:min(680px,100%);display:flex;align-items:center;gap:10px;margin-top:-2px;padding:5px 14px;border:1px solid rgba(var(--a),.16);border-radius:16px;background:rgba(3,12,22,.45);font-size:13px;min-width:0}
+.replies .label{display:inline-flex;align-items:center;gap:6px;color:var(--acc2);flex:none;font-size:10.5px}
+.replies .rt{flex:none;font-family:var(--font-mono);font-size:11px;color:var(--muted)}
+.replies .rx{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+.replies .empty2{color:var(--muted)}
+.replies .lnkbtn{flex:none}
+@media (min-width:1241px){.ring{width:min(320px,27vh);height:min(320px,27vh)}}
+.lnkbtn{font-family:var(--font-mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--acc)}
+.connbtn{color:var(--acc2);border-color:rgba(var(--a),.35)}
+.nmodal{position:fixed;inset:0;z-index:50;background:rgba(1,4,8,.72);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);display:grid;place-items:center;padding:16px}
+.nmodal .mbox{width:min(560px,100%);max-height:88vh;overflow:auto;background:rgba(7,21,34,.96);box-shadow:0 0 40px rgba(var(--a),.18);transform:none}
+.mbox .x{color:var(--muted);font-size:16px;padding:4px 8px}.mbox .x:hover{color:var(--text)}
+.mbox .svc{display:flex;align-items:center;gap:10px;margin:-6px 0 10px}
+.crow{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid rgba(var(--a),.09)}
+.clist .crow:first-child{border-top:0}
+.crow b{font-family:var(--font-hd);font-size:17px;letter-spacing:.04em}
+.crow.ctl{border-top:1px solid rgba(var(--a),.22);margin-top:6px}
+.btn.sm{font-size:13px;padding:7px 12px}
+.btn.danger{border-color:rgba(var(--bad),.5);color:rgb(var(--bad));background:rgba(var(--bad),.08)}
+.quote{margin-top:6px;padding:10px 12px;border-left:2px solid var(--acc);background:rgba(var(--a),.06);white-space:pre-wrap;word-break:break-word;max-height:30vh;overflow:auto}
+.msel{display:block;width:100%;margin-top:6px;padding:9px 10px;background:#071522;color:var(--text);border:1px solid rgba(var(--a),.4);border-radius:4px;font:inherit}
+.cmderr{color:rgb(var(--bad));margin-top:10px;min-height:1em;font-size:14px}
+.notconn{display:flex;gap:14px;align-items:flex-start;color:rgb(var(--warn))}
+.notconn b{font-family:var(--font-hd);font-size:18px;letter-spacing:.06em;color:rgb(var(--warn))}
+.rfull{white-space:pre-wrap;word-break:break-word;margin-top:4px}
+@media (max-width:760px){
+  .cmdbar{padding:0 5px 0 12px;gap:7px}
+  .cmdtarget{font-size:10.5px;padding:6px 22px 6px 9px;background-position:right 7px center}
+  .cmdtext{font-size:15px}.cmdsend{width:34px;height:34px}
+  .cmdbar .cmdic{display:none}
+  .cmdnote{display:none}
+  .replies{order:4}
+  .connbtn .lt{display:none}
+}

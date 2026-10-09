@@ -1,8 +1,8 @@
 // NOVA service worker: caches the app shell for offline/instant load.
 // Data is never cached: data/*, the GitHub API and the Calo site always go to the network.
-const CACHE = 'nova-shell-v1';
+const CACHE = 'nova-shell-v2';
 const SHELL = [
-  './', './index.html', './css/nova.css', './js/app.js', './manifest.webmanifest',
+  './', './index.html', './css/nova.css', './js/app.js', './js/connect.js', './manifest.webmanifest',
   './icons/logo.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
   './fonts/inter.woff2', './fonts/orbitron.woff2', './fonts/jetbrains-mono.woff2',
   './fonts/rajdhani-medium.woff2', './fonts/rajdhani-semibold.woff2', './fonts/rajdhani-bold.woff2',

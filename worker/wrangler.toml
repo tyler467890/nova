@@ -1,0 +1,19 @@
+# NOVA API: secure backend for the NOVA dashboard (https://tyler467890.github.io/nova/).
+# No secrets in this file. Secrets are set with `wrangler secret put NAME` (value piped on stdin).
+name = "nova-api"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+account_id = "0ec810336034d7fb6c906e6f7a12f9cc"
+workers_dev = true
+preview_urls = false
+
+[[kv_namespaces]]
+binding = "NOVA_KV"
+id = "133524f5e80f4231b1a91e42ab295759"
+
+[vars]
+ALLOWED_ORIGIN = "https://tyler467890.github.io"
+REPO_ALLOWLIST = "tyler467890/student-day-planner,tyler467890/nova"
+CURSOR_DAILY_CAP = "10"
+COPILOT_DAILY_CAP = "10"
+GROK_DAILY_CAP = "50"
