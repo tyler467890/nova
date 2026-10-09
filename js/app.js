@@ -26,7 +26,7 @@ const state = {
   gh: lsGet(LS.gh) || { cache: {}, prs: null, run: null, commit: null, fetchedAt: 0, error: '', rateResetAt: 0 },
   calo: lsGet(LS.calo) || { checkedAt: 0, online: null },
 };
-window.NOVA = { state, conn, version: '1.1.0' }; // read-only hook for add-on layers (e.g. a 3D renderer)
+window.NOVA = { state, conn, version: '1.2.0' }; // read-only hook for add-on layers (e.g. a 3D renderer)
 const emit = (name, detail) => window.dispatchEvent(new CustomEvent('nova:' + name, { detail }));
 
 // ---------- time ----------
@@ -211,7 +211,7 @@ function caloPanel() {
   const c = state.calo, s = caloStats();
   const up = updates().slice(0, 3);
   return `<div class="panel calo">
-   <div class="bun">${bunny(150)}<span class="label">Calo guide</span></div>
+   <div class="bun"><div class="holo" data-holo-slot>${bunny(150)}</div><span class="label">Calo guide${n3d.webgl ? ' · drag' : ''}</span></div>
    <div class="cstats">
     <div class="ph" style="margin-bottom:12px"><h3>${esc(c.name || 'Calo')} App</h3>${s.badge}</div>
     <div class="kv"><div><div class="label">Version</div><div class="big">${esc(s.version)}</div></div>
@@ -294,11 +294,11 @@ function viewOverview() {
   return `<div class="ov">
   ${teamPanel()}
   <section class="center">
-   <div class="core">
+   <div class="core" data-n3d-container>
     <div class="greet"><h1 class="glow"><span data-greet>${greeting()}</span>, Tyler</h1><p>${esc(sub)}</p></div>
     <div class="ringwrap">
      <div class="side l">${hs('Agents', state.status ? `${c.working} / ${c.total}` : '—', 'working right now')}${hs('Needs you', state.status ? c.need : '—', 'waiting on you', c.need ? 'warnc' : '')}</div>
-     <div class="ring" id="core-ring">${coreRing(sys.arcs)}</div>
+     <div class="ring" id="core-ring" data-n3d-core title="Drag to rotate · scroll or pinch to zoom · pick a node for details">${coreRing(sys.arcs)}${clock3d()}</div>
      <div class="side r">${hs('Calo app', !state.calo.checkedAt ? '…' : state.calo.online ? 'Online' : 'Offline', state.calo.online ? 'v' + esc(cs.version) + ' · live site' : 'live site', state.calo.online ? 'okc' : state.calo.checkedAt ? 'badc' : '')}
       ${hs('Last deploy', rs === 'ok' ? 'Success' : rs === 'bad' ? 'Failed' : rs === 'warn' ? 'Running' : '…', r ? esc(ago(r.updated_at)) : 'GitHub Pages', rs === 'ok' ? 'okc' : rs === 'bad' ? 'badc' : '')}</div>
      <div class="mini"><div><div class="label">Agents</div><b>${state.status ? `${c.working} / ${c.total}` : '—'}</b></div><div><div class="label">Calo</div><b class="${state.calo.online ? 'okc' : 'badc'}">${!state.calo.checkedAt ? '…' : state.calo.online ? 'Online' : 'Offline'}</b></div><div><div class="label">Deploy</div><b class="${rs === 'ok' ? 'okc' : ''}">${rs === 'ok' ? 'Live' : rs === 'bad' ? 'Failed' : rs === 'warn' ? 'Running' : '…'}</b></div></div>
@@ -369,7 +369,7 @@ function viewCalo() {
   return `<div class="cv">
    <div class="stack">
     <div class="panel cbig">
-     <div class="bun">${bunny(220)}</div>
+     <div class="bun"><div class="holo big" data-holo-slot>${bunny(220)}</div></div>
      <div>
       <div class="ph" style="margin-bottom:6px"><h3 style="font-size:24px">${esc(c.name || 'Calo')} App</h3>${s.badge}</div>
       <div class="mutedt" style="font-size:15px">${esc(c.description || 'Live check of the public Calo site.')}</div>
@@ -423,6 +423,7 @@ function renderTop() {
    <nav class="nav">${VIEWS.map(([k, l]) => `<a href="#${k}" class="${state.view === k ? 'on' : ''}">${l}</a>`).join('')}</nav>
    <div class="tright"><span class="pill ${sys.issues.length ? 'warn' : ''}" title="${esc(sys.issues.join(', ') || 'Calo online, deploy OK, team feed decrypted')}"><span class="dot ${sys.issues.length ? 'warn' : 'ok'}"></span>${sys.issues.length ? sys.issues.length + (sys.issues.length === 1 ? ' issue' : ' issues') : 'All systems normal'}</span>
     <span class="clk" data-topclock>${esc(c.date.toUpperCase())} · ${esc(c.hm)} ${esc(c.ap)} ${esc(c.zone)}</span>
+    <button class="lockbtn s2btn" data-screen2 title="Open Screen 2 (operations) in a new window for your second monitor">${ic('ext', 15, 'currentColor')}<span class="lt">Screen 2</span></button>
     <button class="lockbtn connbtn" data-conn title="Connections: which tools are linked to NOVA">${ic('bolt', 15, 'currentColor')}<span class="lt">Connections</span></button>
     <button class="lockbtn" data-lock title="Lock NOVA and forget the passphrase on this device">${ic('lock', 15, 'currentColor')}<span class="lt">Lock</span></button><div class="avatar" title="Tyler Fennell">TF</div></div>`;
   $('#tabs').innerHTML = VIEWS.map(([k, , i, l]) => `<a class="tab ${state.view === k ? 'on' : ''}" href="#${k}">${ic(i, 24, state.view === k ? 'var(--acc)' : 'var(--muted)')}<span>${l}</span></a>`).join('');
@@ -432,8 +433,9 @@ function render() {
   renderTop();
   const v = state.view;
   $('#view').innerHTML = v === 'agents' ? viewAgents() : v === 'calo' ? viewCalo() : v === 'business' ? viewBusiness() : viewOverview();
-  document.title = 'NOVA · ' + (VIEWS.find((x) => x[0] === v) || VIEWS[0])[1];
+  document.title = SCREEN2 ? 'NOVA · Screen 2' : 'NOVA · ' + (VIEWS.find((x) => x[0] === v) || VIEWS[0])[1];
   if (keep && $('#cmdtext')) { const x = $('#cmdtext'); x.focus(); try { x.setSelectionRange(keep[0], keep[1]); } catch {} }
+  renderS2(); after3D();
   emit('render', { view: v });
 }
 function tick() {
@@ -453,19 +455,21 @@ function route() {
   if (h[0] === 'agents' && h[1] != null && !isNaN(+h[1])) state.selAgent = +h[1];
   render(); window.scrollTo(0, 0);
 }
+function openAgent(i) {
+  if (SCREEN2) return;
+  if (matchMedia('(max-width:760px)').matches) openSheet(i); else { state.selAgent = i; location.hash = '#agents/' + i; }
+}
 function openSheet(i) {
   const a = agents()[i]; if (!a) return;
   $('#sheet').innerHTML = `<div class="sheet" data-close><div class="panel">${agentDetail(a)}<div class="btns" style="margin-top:16px"><button class="btn" data-close>Close</button></div></div></div>`;
 }
 
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-agent],[data-select],[data-filter],[data-lock],[data-ask],[data-recheck],[data-close]');
+  const t = e.target.closest('[data-agent],[data-select],[data-filter],[data-lock],[data-ask],[data-recheck],[data-close],[data-screen2]');
   if (!t) return;
   if (t.hasAttribute('data-close')) { if (e.target === t || e.target.closest('button[data-close]')) $('#sheet').innerHTML = ''; return; }
-  if (t.hasAttribute('data-agent')) {
-    const i = +t.getAttribute('data-agent');
-    if (matchMedia('(max-width:760px)').matches) openSheet(i); else { state.selAgent = i; location.hash = '#agents/' + i; }
-  } else if (t.hasAttribute('data-select')) { state.selAgent = +t.getAttribute('data-select'); render(); }
+  if (t.hasAttribute('data-screen2')) { const u = new URL(location.href); u.hash = ''; u.searchParams.set('screen', '2'); window.open(u.href, 'nova-screen-2', 'noopener'); return; }
+  if (t.hasAttribute('data-agent')) openAgent(+t.getAttribute('data-agent')); else if (t.hasAttribute('data-select')) { state.selAgent = +t.getAttribute('data-select'); render(); }
   else if (t.hasAttribute('data-filter')) { state.teamFilter = t.getAttribute('data-filter'); render(); }
   else if (t.hasAttribute('data-lock')) lock();
   else if (t.hasAttribute('data-ask')) { t.classList.add('show'); clearTimeout(t._tm); t._tm = setTimeout(() => t.classList.remove('show'), 2200); }
@@ -562,6 +566,154 @@ async function checkCalo(force) {
   state.calo = next; lsSet(LS.calo, next); emit('data', { source: 'calo' }); render();
 }
 
+// ---------- 3D layer (3d/nova-3d.min.js) ----------
+const N3 = window.NOVA3D || null;
+const SCREEN2 = document.documentElement.getAttribute('data-n3d-screen') === '2';
+const BUNNY = '3d/assets/calo-bunny.glb';
+const n3d = { shown: false, webgl: false, booted: false, holo: null, agentsKey: '', runKey: '' };
+function clock3d() {
+  const c = clockParts();
+  return `<div class="clock3d" aria-hidden="true"><b data-clock>${c.hm}</b><span data-ampm>${c.ap} · ${c.zone}</span><small>Halifax</small></div>`;
+}
+function sync3D() {
+  if (!N3) return;
+  const a = agents(), working = a.filter((x) => x.status === 'working').length, need = a.some((x) => x.status === 'needs_you');
+  const list = a.map((x) => ({ name: x.name, status: x.status === 'needs_you' || x.status === 'working' ? x.status : 'idle' }));
+  const key = JSON.stringify(list);
+  if (key !== n3d.agentsKey) { n3d.agentsKey = key; N3.setAgents(list); N3.setActivity(working, Math.max(1, a.length)); }
+  const st = need ? 'alert' : working ? 'busy' : 'normal';
+  if (N3.state.status !== st) N3.setStatus(st);
+  const r = state.gh.run, rk = r ? r.run_number + ':' + r.status : '';
+  if (n3d.runKey && rk && rk !== n3d.runKey) N3.pulse(); // new deploy activity
+  if (rk) n3d.runKey = rk;
+}
+function placeHolo() {
+  if (!N3 || !n3d.webgl) return;
+  const slot = $('#view [data-holo-slot]'); if (!slot) return;
+  if (!n3d.holo) {
+    n3d.holo = document.createElement('div'); n3d.holo.className = 'holo-host';
+    slot.replaceChildren(n3d.holo);
+    N3.mountHologram(n3d.holo, BUNNY, { label: 'Calo the bunny, holographic 3D model. Drag to spin.' });
+  } else if (n3d.holo.parentElement !== slot) slot.replaceChildren(n3d.holo); // re-use one WebGL context across re-renders
+}
+function after3D() {
+  if (!N3) return;
+  N3.attachPanels('#view .panel, #s2 .panel', { boot: !n3d.booted });
+  n3d.booted = true;
+  placeHolo(); sync3D(); refreshFocus();
+}
+function reset3D() {
+  if (!N3) return;
+  N3.back(); n3d.booted = false; n3d.agentsKey = ''; N3.setAgents([]); N3.setActivity(0, 1); N3.setStatus('normal');
+}
+// focus detail: real data per area
+const drow = (dot, title, sub, right = '', href = '', attrs = '') => {
+  const inner = `<span class="dot ${dot}"></span><div class="grow"><b class="ell" style="display:block">${title}</b>${sub ? `<div class="mutedt sm">${sub}</div>` : ''}</div>${right}`;
+  const u = safeUrl(href);
+  return u ? `<a class="row hov" href="${esc(u)}" target="_blank" rel="noopener">${inner}</a>` : attrs ? `<button class="row drow" ${attrs}>${inner}</button>` : `<div class="row">${inner}</div>`;
+};
+const kvs = (items) => `<div class="kv dkv">${items.map(([k, v, cls = '']) => `<div><div class="label">${k}</div><div class="big ${cls}">${v}</div></div>`).join('')}</div>`;
+function renderArea(area) {
+  const wait = `<div class="empty">${state.statusErr ? esc(state.statusErr) : 'Decrypting…'}</div>`;
+  if (area === 'team') {
+    const a = agents(), c = counts(); if (!state.status) return wait;
+    const order = { needs_you: 0, working: 1, done: 2, idle: 3 };
+    const rows = a.map((x, i) => [x, i]).sort((p, q) => (order[p[0].status] ?? 4) - (order[q[0].status] ?? 4)).map(([x, i]) => {
+      const s = stOf(x), right = `<span class="badge ${s.badge}">${s.label}</span>`;
+      return drow(s.dot, `${esc(x.name)} <small class="mutedt">${esc(KIND[x.kind] || x.kind || '')}</small>`, esc(x.task || (x.status === 'idle' ? 'Standing by' : '')), right, '', SCREEN2 ? '' : `data-agent="${i}"`);
+    }).join('');
+    return kvs([['Working', c.working], ['Need you', c.need, c.need ? 'warnc' : ''], ['Agents', c.total]]) + `<div class="dlist">${rows || '<div class="empty">No agents yet</div>'}</div>` + `<div class="dfoot mutedt sm">${state.status.updatedAt ? 'Updated ' + esc(ago(state.status.updatedAt)) + ' · ' : ''}Encrypted feed</div>`;
+  }
+  if (area === 'github') {
+    const g = state.gh, r = g.run, cm = g.commit, rs = runState(), prs = g.prs || [];
+    const dep = rs === 'ok' ? ['Live', 'okc'] : rs === 'bad' ? ['Failed', 'badc'] : rs === 'warn' ? ['Running', 'warnc'] : ['…', ''];
+    let h = kvs([['Deploy', dep[0], dep[1]], ['Open PRs', g.prs ? prs.length : '…'], ['Last commit', cm ? esc(ago(cm.date)) : '…']]);
+    h += '<div class="dlist">';
+    if (r) h += drow(rs === 'ok' ? 'ok' : rs === 'bad' ? 'bad' : 'warn', 'Latest deploy · ' + esc(r.name || 'workflow'), `${r.status !== 'completed' ? 'Deploying now' : esc(r.conclusion || '')} · run #${esc(r.run_number)} · ${esc(ago(r.updated_at))}`, '', r.html_url);
+    if (cm) h += drow('', esc(cm.message), `<span class="mono">${esc(cm.sha)}</span> · ${esc(cm.author || '')} · ${esc(ago(cm.date))}`, '', cm.html_url);
+    h += '</div><div class="label" style="margin:12px 0 2px">Open pull requests</div><div class="dlist">';
+    h += g.prs ? (prs.length ? prs.map((p) => drow('', `#${esc(p.number)} ${esc(p.title)}`, 'Updated ' + esc(ago(p.updated_at)), p.draft ? '<span class="badge dim">Draft</span>' : '<span class="badge acc">Ready</span>', p.html_url)).join('') : '<div class="empty">No open pull requests</div>') : '<div class="empty">Loading…</div>';
+    h += '</div>';
+    if (g.error) h += `<div class="mutedt sm" style="margin-top:8px">${esc(g.error)}</div>`;
+    return h + `<div class="dfoot mutedt sm"><a class="lnk" href="https://github.com/${REPO}" target="_blank" rel="noopener">${REPO}</a>${g.fetchedAt ? ' · synced ' + esc(ago(g.fetchedAt)) : ''}</div>`;
+  }
+  if (area === 'tasks') {
+    const t = tasks(); if (!state.status) return wait;
+    const done = t.filter((x) => x.done).length;
+    const rows = t.map((x) => { const u = safeUrl(x.link); const inner = `<span class="chk ${x.done ? 'done' : ''}"></span><span class="grow ${x.done ? 'strike' : ''}">${esc(x.title)}</span>`;
+      return u ? `<a class="row hov" href="${esc(u)}" target="_blank" rel="noopener">${inner}</a>` : `<div class="row">${inner}</div>`; }).join('');
+    return kvs([['Done', `${done} / ${t.length}`], ['Left', t.length - done]]) + `<div class="dlist">${rows || '<div class="empty">No tasks yet</div>'}</div>` + `<div class="dfoot mutedt sm"><a class="lnk" href="${NOTION_TASKS}" target="_blank" rel="noopener">Open tasks in Notion</a></div>`;
+  }
+  if (area === 'calo') {
+    const c = state.calo, s = caloStats(), up = updates().slice(0, 4);
+    const stv = !c.checkedAt ? ['…', ''] : c.online ? ['Online', 'okc'] : ['Offline', 'badc'];
+    let h = kvs([['Version', esc(s.version)], ['Status', stv[0], stv[1]], ['Response', c.ms ? esc(c.ms) + ' ms' : '—']]);
+    h += `<div class="mutedt sm" style="margin:2px 0 8px">Live at <a class="lnk" href="${CALO}" target="_blank" rel="noopener">tyler467890.github.io/student-day-planner</a>${c.checkedAt ? ' · checked ' + esc(ago(c.checkedAt)) : ''}${c.cache ? ' · build <span class="mono">' + esc(c.cache) + '</span>' : ''}</div>`;
+    h += '<div class="label" style="margin:6px 0 2px">Recent updates</div><div class="dlist">' + (up.length ? up.map((u) => drow('', esc(u.title), esc(dayLabel(u.time)))).join('') : '<div class="empty">No updates yet</div>') + '</div>';
+    return h;
+  }
+  if (area === 'business') {
+    return `<p class="mutedt" style="margin-bottom:12px">Sales, profit, ads and email show up here once Calo is on Etsy. Nothing is connected yet, so there are no numbers to show.</p>
+      <div class="dlist">${[['Sales & profit', 'Etsy revenue and orders'], ['Ads', 'Spend, clicks and conversions'], ['Email', 'Support inbox']].map(([a, b]) => drow('idle', a, b, '<span class="soon">After launch</span>')).join('')}</div>`;
+  }
+  return '';
+}
+function fillFocus(area, body) {
+  if (!area || !body || body.querySelector('.n3d-remote-note')) return;
+  const top = body.scrollTop; body.innerHTML = renderArea(area); body.scrollTop = top;
+}
+function refreshFocus() {
+  if (!N3 || !N3.state.focus) return;
+  fillFocus(N3.state.focus, document.querySelector('.n3d-detail-body'));
+}
+function renderS2() {
+  if (!$('#s2')) return;
+  const c = counts(), a = agents(), clk = clockParts();
+  const wide = document.documentElement.getAttribute('data-n3d-layout') === 'wide' && !SCREEN2;
+  $('#s2bar').innerHTML = `<div class="brand">${brandMark()}<div class="name">NOVA</div><div class="sub">Screen 2 · Operations</div></div>
+   <div class="tright"><span class="pill link" data-peer><span class="dot idle"></span><span class="linktxt">${wide ? 'Wide mode · both screens' : 'Looking for screen 1…'}</span></span>
+   <span class="clk" data-topclock2>${esc(clk.date.toUpperCase())} · ${esc(clk.hm)} ${esc(clk.ap)} ${esc(clk.zone)}</span>
+   ${SCREEN2 ? `<button class="lockbtn" data-lock title="Lock NOVA and forget the passphrase on this device">${ic('lock', 15, 'currentColor')}<span class="lt">Lock</span></button>` : ''}</div>`;
+  const upd = state.status && state.status.updatedAt ? fTime.format(new Date(state.status.updatedAt)) : '';
+  $('#s2-feed').innerHTML = `<div class="ph"><h3>Agent activity<small>latest status</small></h3><span class="meta"><span class="acc">${c.working} working</span>${c.need ? ` · <span class="warnc">${c.need} need${c.need === 1 ? 's' : ''} you</span>` : ''}</span></div>
+   <div class="scroll s2list">${a.length ? a.map((x) => `<div class="ev2"><span class="tt">${esc(upd)}</span><span class="dot ${stOf(x).dot}"></span><div class="grow"><div class="ea">${esc(x.name)} <small class="mutedt">${esc(KIND[x.kind] || x.kind || '')}</small></div><div class="eb">${esc(stOf(x).label)}${x.task ? ' · ' + esc(x.task) : ''}</div></div></div>`).join('') : `<div class="empty">${state.statusErr ? esc(state.statusErr) : 'Decrypting team status…'}</div>`}</div>`;
+  const ev = [];
+  const g = state.gh;
+  if (g.run) ev.push([g.run.updated_at, runState() === 'ok' ? 'ok' : runState() === 'bad' ? 'bad' : 'warn', 'deploy', `${g.run.name || 'workflow'} #${g.run.run_number} · ${g.run.status !== 'completed' ? 'running' : g.run.conclusion}`]);
+  if (g.commit) ev.push([g.commit.date, 'acc', 'commit', `${g.commit.sha} ${g.commit.message}`]);
+  (g.prs || []).slice(0, 4).forEach((p) => ev.push([p.updated_at, 'acc', 'pr', `#${p.number} ${p.title}${p.draft ? ' (draft)' : ''}`]));
+  updates().forEach((u) => ev.push([u.time, 'acc', 'update', u.title]));
+  (conn.inbox || []).slice(0, 3).forEach((x) => ev.push([x.time, 'ok', 'reply', x.text]));
+  if (state.calo.checkedAt) ev.push([state.calo.checkedAt, state.calo.online ? 'ok' : 'bad', 'uptime', `Calo ${state.calo.online ? 'online' : 'offline'}${state.calo.ms ? ' · ' + state.calo.ms + ' ms' : ''}`]);
+  const tms = (v) => { const t = typeof v === 'number' ? v : Date.parse(v && v.length === 10 ? v + 'T12:00:00-03:00' : v); return isNaN(t) ? 0 : t; };
+  ev.sort((x, y) => tms(y[0]) - tms(x[0]));
+  $('#s2-logs').innerHTML = `<div class="ph"><h3>Activity log<small>GitHub · Calo · team</small></h3><span class="meta">Halifax time</span></div>
+   <div class="scroll s2list">${ev.length ? ev.slice(0, 14).map(([t, k, kind, m]) => `<div class="lg"><span class="lt">${tms(t) ? esc(fYmd.format(new Date(tms(t))) === fYmd.format(new Date()) ? fTime.format(new Date(tms(t))) : fDay.format(new Date(tms(t)))) : ''}</span><span class="lk ${k}">${esc(kind)}</span><span class="lm" title="${esc(m)}">${esc(m)}</span></div>`).join('') : '<div class="empty">Loading…</div>'}</div>`;
+  $('#s2-biz').innerHTML = `<div class="ph"><h3>Business<small>after launch</small></h3><span class="soon">Coming after launch</span></div>
+   <p class="mutedt" style="font-size:14px">Etsy sales, profit, ads and email appear here after Calo launches. Nothing is connected yet.</p>
+   <div class="bk">${['Sales', 'Profit', 'Ads', 'Email'].map((k) => `<div class="future"><div class="label">${k}</div><div class="big dimt">—</div></div>`).join('')}</div>`;
+  const bl = $('#s2-baylbl'); if (bl) bl.textContent = `Calo${state.calo.version ? ' v' + state.calo.version : ''} · phone + guide preview`;
+  updatePeer();
+}
+function updatePeer() {
+  const p = $('[data-peer]'); if (!p || !N3) return;
+  const wide = document.documentElement.getAttribute('data-n3d-layout') === 'wide' && !SCREEN2, on = wide || N3.state.peer;
+  p.classList.toggle('on', on);
+  p.querySelector('.linktxt').textContent = wide ? 'Wide mode · both screens' : on ? (SCREEN2 ? 'Linked to screen 1' : 'Linked to screen 2') : (SCREEN2 ? 'Open NOVA on screen 1' : 'Screen 2 not open');
+}
+if (N3) {
+  document.addEventListener('nova:3d-ready', (e) => {
+    n3d.webgl = !!e.detail.webgl;
+    document.documentElement.classList.toggle('n3d-on', n3d.webgl);
+  });
+  document.addEventListener('nova:focus', (e) => fillFocus(e.detail.area, e.detail.body));
+  document.addEventListener('nova:agent-select', (e) => openAgent(e.detail.index));
+  document.addEventListener('nova:layout', () => { if (n3d.shown) render(); });
+  window.addEventListener('hashchange', () => { if (N3.state.focus) N3.back(); });
+  setInterval(updatePeer, 2000);
+  setInterval(() => { const t = $('[data-topclock2]'); if (t) { const c = clockParts(); t.textContent = `${c.date.toUpperCase()} · ${c.hm} ${c.ap} ${c.zone}`; } }, 1000);
+}
+
 // ---------- lock / unlock ----------
 let timers = [];
 function startLive() {
@@ -569,20 +721,20 @@ function startLive() {
   refreshGitHub(); checkCalo();
   timers.push(setInterval(() => { refreshGitHub(); checkCalo(); refreshStatus(); }, REFRESH_MS));
   timers.push(setInterval(tickAgo, 30000));
-  timers.push(setInterval(() => { if (document.visibilityState === 'visible') refreshConn(); }, 90000));
+  if (!SCREEN2) timers.push(setInterval(() => { if (document.visibilityState === 'visible') refreshConn(); }, 90000));
   document.addEventListener('visibilitychange', onVis);
 }
 function stopLive() { timers.forEach(clearInterval); timers = []; document.removeEventListener('visibilitychange', onVis); }
 function onVis() { if (document.visibilityState === 'visible') { refreshGitHub(); checkCalo(); if (Date.now() - state.statusLoadedAt > 60000) refreshStatus(); } }
 function lock(msg) {
-  apiLogout(); if ($('#modal')) $('#modal').innerHTML = '';
-  localStorage.removeItem(LS.pass); keyCache.clear(); state.status = null; stopLive();
-  $('#view').innerHTML = ''; $('#sheet').innerHTML = '';
+  n3d.shown = false; apiLogout(); if ($('#modal')) $('#modal').innerHTML = '';
+  localStorage.removeItem(LS.pass); keyCache.clear(); state.status = null; stopLive(); reset3D();
+  $('#view').innerHTML = ''; $('#sheet').innerHTML = ''; ['#s2-feed', '#s2-logs'].forEach((k) => { if ($(k)) $(k).innerHTML = ''; });
   $('#lock').hidden = false; $('#screen').setAttribute('aria-hidden', 'true');
   const m = $('#lockmsg'); m.textContent = msg || 'Locked. Enter your passphrase to open NOVA.'; m.className = 'lockmsg' + (msg ? ' err' : '');
   $('#pass').value = ''; setTimeout(() => $('#pass').focus(), 50);
 }
-function showApp() { $('#lock').hidden = true; $('#screen').removeAttribute('aria-hidden'); route(); startLive(); }
+function showApp() { n3d.shown = true; $('#lock').hidden = true; $('#screen').removeAttribute('aria-hidden'); route(); startLive(); }
 $('#lockring').innerHTML = coreRing([{ state: 'ok' }, { state: 'ok' }, { state: 'ok' }], false);
 $('#lockform').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -592,7 +744,7 @@ $('#lockform').addEventListener('submit', async (e) => {
   try {
     state.status = await fetchStatus(pass); state.statusErr = ''; state.statusLoadedAt = Date.now();
     localStorage.setItem(LS.pass, pass); m.textContent = ''; showApp();
-    apiLogin(pass).then(refreshConn); // silent sign-in to the secure service (nova-api)
+    if (!SCREEN2) apiLogin(pass).then(refreshConn); // silent sign-in to the secure service (nova-api)
   } catch (err) {
     m.className = 'lockmsg err';
     m.textContent = err instanceof WrongPass ? 'That passphrase didn’t work. Check the words and dashes.' : 'Couldn’t reach the status file. Check your connection.';
@@ -600,12 +752,13 @@ $('#lockform').addEventListener('submit', async (e) => {
 });
 
 // boot
+if (N3) { try { N3.init(); } catch (e) { console.warn('NOVA 3D unavailable:', e.message); } }
 setInterval(tick, 1000);
 (async () => {
   const pass = localStorage.getItem(LS.pass);
   if (!pass) { lock(); $('#lockmsg').className = 'lockmsg'; $('#lockmsg').textContent = 'Remembered on this device until you press Lock.'; return; }
   showApp();
-  refreshConn();
+  if (!SCREEN2) refreshConn();
   await refreshStatus();
 })();
 window.addEventListener('nova:conn', () => { if ($('#lock').hidden) render(); });

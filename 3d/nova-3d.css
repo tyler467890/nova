@@ -1,0 +1,63 @@
+/* NOVA 3D layer styles. Uses the dashboard's CSS variables when present. */
+:root{--n3d-a:var(--a,64,214,255);--n3d-warn:var(--warn,255,184,77);--n3d-text:var(--text,#e2f6ff);--n3d-muted:var(--muted,#7f9db3);
+  --n3d-mono:var(--font-mono,'JetBrains Mono',ui-monospace,monospace);--n3d-hd:var(--font-hd,'Rajdhani','Inter',sans-serif)}
+#nova-3d{position:fixed;inset:0;width:100vw;height:100vh;height:100lvh;display:block;z-index:0;pointer-events:none;background:var(--bg,#03080f)}
+.n3d-overlay{position:fixed;inset:0;pointer-events:none;z-index:40}
+.n3d-anchor{touch-action:none;cursor:grab;-webkit-user-select:none;user-select:none}
+.n3d-anchor:active{cursor:grabbing}
+.n3d-surface.n3d-pointer,.n3d-surface.n3d-pointer .n3d-anchor{cursor:pointer}
+
+/* data node labels (real buttons: keyboard + screen-reader friendly) */
+.n3d-node-label{position:absolute;left:0;top:0;pointer-events:auto;display:flex;flex-direction:column;align-items:center;gap:1px;
+  font:600 12px/1.1 var(--n3d-mono);letter-spacing:.16em;text-transform:uppercase;color:rgb(var(--n3d-a));white-space:nowrap;
+  background:rgba(3,10,18,.72);border:1px solid rgba(var(--n3d-a),.35);border-radius:4px;padding:5px 9px;cursor:pointer;
+  transition:border-color .2s,background .2s,color .2s;text-shadow:0 0 10px rgba(var(--n3d-a),.45);will-change:transform}
+.n3d-node-label:hover,.n3d-node-label.n3d-hot,.n3d-node-label:focus-visible{border-color:rgba(var(--n3d-a),.9);background:rgba(10,40,60,.85);color:#fff;outline:none}
+.n3d-node-label .n3d-nl-s{font-size:9.5px;letter-spacing:.14em;color:var(--n3d-muted);text-shadow:none}
+.n3d-node-label.n3d-muted{color:var(--n3d-muted);border-style:dashed;text-shadow:none}
+
+.n3d-tip{position:absolute;left:0;top:0;font:600 12px/1 var(--n3d-mono);letter-spacing:.08em;color:var(--n3d-text);background:rgba(3,10,18,.9);
+  border:1px solid rgba(var(--n3d-a),.5);padding:6px 9px;border-radius:4px;opacity:0;transition:opacity .15s;white-space:nowrap}
+
+/* holographic detail panel */
+.n3d-detail{position:fixed;pointer-events:auto;display:flex;flex-direction:column;gap:14px;padding:20px 22px;border-radius:8px;overflow:hidden;
+  background:linear-gradient(160deg,rgba(14,44,68,.82),rgba(4,16,28,.9));border:1px solid rgba(var(--n3d-a),.55);
+  box-shadow:0 0 0 1px rgba(0,0,0,.3),0 0 40px rgba(var(--n3d-a),.18),inset 0 0 60px rgba(var(--n3d-a),.06);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);color:var(--n3d-text)}
+.n3d-detail[hidden]{display:none}
+.n3d-detail::before{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(115deg,rgba(255,255,255,.06),transparent 35%);}
+.n3d-detail-hd{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.n3d-detail-k{font:600 10.5px/1 var(--n3d-mono);letter-spacing:.22em;text-transform:uppercase;color:var(--n3d-muted)}
+.n3d-detail-t{font:700 26px/1.1 var(--n3d-hd);letter-spacing:.1em;text-transform:uppercase;color:var(--acc2,#9beaff);margin:6px 0 0;text-shadow:0 0 16px rgba(var(--n3d-a),.45)}
+.n3d-back{flex:none;display:inline-flex;align-items:center;gap:8px;font:600 13px/1 var(--n3d-hd);letter-spacing:.12em;text-transform:uppercase;color:var(--n3d-text);
+  background:rgba(var(--n3d-a),.10);border:1px solid rgba(var(--n3d-a),.55);border-radius:4px;padding:8px 12px;cursor:pointer}
+.n3d-back:hover,.n3d-back:focus-visible{background:rgba(var(--n3d-a),.22);outline:none;box-shadow:0 0 12px rgba(var(--n3d-a),.4)}
+.n3d-back kbd{font:500 10px/1 var(--n3d-mono);color:var(--n3d-muted);border:1px solid rgba(255,255,255,.14);border-radius:3px;padding:2px 5px}
+.n3d-detail-body{flex:1;min-height:0;overflow:auto;font-size:15px;line-height:1.45}
+.n3d-detail-scan{position:absolute;left:0;right:0;top:var(--n3d-scan,-10%);height:2px;background:rgba(var(--n3d-a),.9);box-shadow:0 0 16px 3px rgba(var(--n3d-a),.6);pointer-events:none}
+.n3d-detail:not([style*="--n3d-scan"]) .n3d-detail-scan{display:none}
+.n3d-detail.n3d-compact .n3d-detail-body{flex:none}
+.n3d-remote-note{color:var(--n3d-muted);font:600 13px var(--n3d-mono);letter-spacing:.08em}
+.n3d-detail[data-mode="sheet"]{border-radius:14px}
+
+/* panels: glass, pointer glare edge, lift, boot scan */
+.n3d-panel{transform-origin:50% 50%;backface-visibility:hidden}
+.n3d-fx{position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:3}
+.n3d-fx.n3d-glass{background:linear-gradient(118deg,rgba(255,255,255,.045) 0%,rgba(255,255,255,.012) 28%,transparent 42%)}
+.n3d-fx::before{content:"";position:absolute;inset:-1px;border-radius:inherit;padding:1px;opacity:0;transition:opacity .3s;
+  background:radial-gradient(260px circle at var(--mx,50%) var(--my,50%),rgba(190,240,255,.95),rgba(var(--n3d-a),.35) 35%,transparent 65%);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box exclude,linear-gradient(#000 0 0)}
+.n3d-fx::after{content:"";position:absolute;inset:0;border-radius:inherit;opacity:0;transition:opacity .3s;
+  background:radial-gradient(420px circle at var(--mx,50%) var(--my,50%),rgba(var(--n3d-a),.07),transparent 60%)}
+.n3d-hover>.n3d-fx::before,.n3d-hover>.n3d-fx::after{opacity:1}
+.n3d-panel.n3d-lifted{box-shadow:0 0 0 1px rgba(0,0,0,.2),0 18px 40px rgba(0,0,0,.35),0 0 26px rgba(var(--n3d-a),.12),inset 0 0 40px rgba(var(--n3d-a),.05)}
+.n3d-booting>.n3d-fx{background:repeating-linear-gradient(180deg,rgba(var(--n3d-a),.10) 0 1px,transparent 1px 3px)}
+.n3d-booting>.n3d-fx::after{opacity:1;top:auto;bottom:auto;height:2px;top:calc(var(--n3d-scan,0%) - 2px);background:rgba(var(--n3d-a),.95);box-shadow:0 0 14px 3px rgba(var(--n3d-a),.55)}
+
+/* hologram mini canvas */
+.n3d-holo-canvas{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:grab;touch-action:pan-y}
+.n3d-holo-canvas:active{cursor:grabbing}
+
+@media (prefers-reduced-motion: reduce){.n3d-node-label,.n3d-fx::before,.n3d-fx::after,.n3d-tip{transition:none}}
+.n3d-reduced .n3d-node-label,.n3d-reduced .n3d-fx::before,.n3d-reduced .n3d-fx::after{transition:none}
+.n3d-bay-host{position:absolute;inset:0}
+/* --n3d-focus (0..1) is set on <html> while flying to/from a node: use it to fade overview text, e.g. .greet{opacity:calc(1 - var(--n3d-focus,0))} */

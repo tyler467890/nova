@@ -11,7 +11,7 @@
   --a:64,214,255; --acc:rgb(var(--a)); --acc2:#9beaff;
   --warn:255,184,77; --ok:84,232,170; --bad:255,107,107;
   --text:#e2f6ff; --muted:#7f9db3; --dim:#4b6477;
-  --panel:rgba(10,30,48,.55); --line:rgba(var(--a),.22);
+  --panel:rgba(8,26,42,.42); --line:rgba(var(--a),.22);
   --font-ui:'Inter',system-ui,sans-serif;
   --font-hd:'Rajdhani','Inter',sans-serif;
   --font-dp:'Orbitron','Rajdhani',sans-serif;
@@ -62,7 +62,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .dot.pulse{animation:pulse 1.8s ease-in-out infinite}
 @keyframes pulse{50%{opacity:.35}}
 .panel{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:20px 22px;
-  box-shadow:0 0 0 1px rgba(0,0,0,.2), inset 0 0 40px rgba(var(--a),.035);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);min-width:0}
+  box-shadow:0 0 0 1px rgba(0,0,0,.2), inset 0 0 40px rgba(var(--a),.035);backdrop-filter:blur(10px) saturate(1.15);-webkit-backdrop-filter:blur(10px) saturate(1.15);min-width:0}
 .panel::before,.panel::after{content:"";position:absolute;width:16px;height:16px;border-color:var(--acc);border-style:solid;opacity:.8;pointer-events:none}
 .panel::before{top:-1px;left:-1px;border-width:2px 0 0 2px;border-top-left-radius:6px}
 .panel::after{bottom:-1px;right:-1px;border-width:0 2px 2px 0;border-bottom-right-radius:6px}
@@ -263,7 +263,7 @@ main.view{position:relative;z-index:1}
 .lockmsg.err{color:rgb(var(--bad))}
 
 /* agent sheet (phone) */
-.sheet{position:fixed;inset:0;z-index:40;background:rgba(1,4,8,.7);display:flex;align-items:flex-end}
+.sheet{position:fixed;inset:0;z-index:45;background:rgba(1,4,8,.7);display:flex;align-items:flex-end}
 .sheet .panel{width:100%;border-radius:14px 14px 0 0;padding:20px 18px calc(24px + env(safe-area-inset-bottom));max-height:85vh;overflow:auto;background:#071522}
 
 /* ---------- tablet ---------- */
@@ -332,7 +332,7 @@ main.view{position:relative;z-index:1}
   .ft{font-size:15px}
   .fx{gap:12px}.fx svg{width:24px;height:24px}
 
-  .tabs{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:30;height:calc(74px + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom);
+  .tabs{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:42;height:calc(74px + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom);
     justify-content:space-around;align-items:center;border-top:1px solid var(--line);background:rgba(3,8,15,.94);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
   .tab{display:flex;flex-direction:column;align-items:center;gap:4px;font-family:var(--font-hd);font-weight:600;font-size:12.5px;letter-spacing:.06em;color:var(--muted);width:70px}
   .tab.on{color:var(--acc)}
@@ -369,16 +369,6 @@ main.view{position:relative;z-index:1}
 }
 @media (min-width:761px){.mini,.needp,.pteam{display:none!important}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
-
-/* ---------- 3D hook ----------
-   #nova-3d: full-screen canvas behind all panels for a future three.js layer.
-   .view sets perspective so any .panel can take CSS 3D transforms (rotateX/Y, translateZ)
-   via the --rx / --ry / --tz custom properties without layout changes. */
-#nova-3d{position:fixed;inset:0;width:100vw;height:100vh;height:100dvh;z-index:0;pointer-events:none;display:block}
-.screen.has-3d::before{opacity:.04}
-main.view{perspective:1800px;perspective-origin:50% 40%}
-.panel,.agent,.tool .ic{transform-style:preserve-3d}
-.panel{--rx:0deg;--ry:0deg;--tz:0px;transform:translateZ(var(--tz)) rotateX(var(--rx)) rotateY(var(--ry))}
 
 /* ---------- layout refinements ---------- */
 .rightcol .gh{flex:0 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}
@@ -446,4 +436,90 @@ main.view{perspective:1800px;perspective-origin:50% 40%}
   .cmdnote{display:none}
   .replies{order:4}
   .connbtn .lt{display:none}
+}
+
+/* ---------- 3D layer (3d/nova-3d.css + 3d/nova-3d.min.js) ----------
+   The three.js canvas paints the whole backdrop; panels are translucent glass over it. */
+#nova-3d{position:fixed;inset:0;width:100vw;height:100vh;height:100lvh;z-index:0;pointer-events:none;display:block}
+.s1,.s2{position:relative;z-index:1}
+.s2{display:none}
+html.n3d-on .screen::before{opacity:.03}
+.clock3d{display:none}
+html.n3d-on .ring svg{display:none}
+html.n3d-on .clock3d{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none}
+.clock3d b{font-family:var(--font-dp);font-weight:600;font-size:38px;letter-spacing:.06em;color:var(--text);text-shadow:0 0 16px rgba(var(--a),.7),0 1px 2px #000}
+.clock3d span{font-family:var(--font-mono);font-size:11px;letter-spacing:.3em;color:var(--acc2);margin-top:6px}
+.clock3d small{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.3em;color:var(--muted);text-transform:uppercase;margin-top:4px}
+.ring{position:relative}
+html.n3d-on .ringwrap{gap:100px}
+/* quiet the overview text while a node is open so the detail reads cleanly */
+.greet,.side,.clock3d{opacity:calc(1 - var(--n3d-focus,0))}
+html[data-n3d-layout="wide"] .greet,html[data-n3d-layout="wide"] .side{opacity:calc(1 - .6*var(--n3d-focus,0))}
+.holo{position:relative;width:150px;height:150px;display:grid;place-items:center}
+.holo.big{width:220px;height:220px}
+.holo-host{position:absolute;inset:-6px}
+.s2btn{color:var(--acc2);border-color:rgba(var(--a),.25)}
+html[data-n3d-layout="wide"] .s2btn,html[data-n3d-screen="2"] .s2btn{display:none}
+
+/* focus detail body (real data) */
+.n3d-detail{background:linear-gradient(160deg,rgba(14,44,68,.80),rgba(4,16,28,.88))}
+.n3d-detail-body{scrollbar-width:thin;scrollbar-color:rgba(var(--a),.3) transparent}
+.n3d-detail-body .dkv{gap:28px;margin-bottom:8px;flex-wrap:wrap}
+.n3d-detail-body .dkv .big{font-size:28px;margin-top:4px}
+.n3d-detail-body .row{padding:9px 0}
+.n3d-detail-body .row b{font-weight:600;font-size:15px}
+.n3d-detail-body .row small{font-family:var(--font-ui);font-weight:400;font-size:12px;margin-left:6px}
+.n3d-detail-body .drow{width:100%;text-align:left;border-left:0;border-right:0;border-bottom:0}
+.n3d-detail-body .drow:hover b,.n3d-detail-body a.row:hover b{color:var(--acc2)}
+.n3d-detail-body .dfoot{margin-top:12px}
+.n3d-detail-body .tasks-row{font-size:15px}
+
+/* ---------- screen 2 · operations ---------- */
+.s2bar .pill.link .dot{background:var(--dim);box-shadow:none}
+.s2bar .pill.link.on .dot{background:rgb(var(--ok));box-shadow:0 0 8px rgb(var(--ok))}
+.grid2{flex:1;min-height:0;display:grid;grid-template-columns:minmax(380px,500px) minmax(0,1fr) minmax(380px,470px);grid-template-rows:minmax(0,1.05fr) minmax(0,1fr);gap:22px 24px;padding:24px 32px}
+.feed{grid-row:1/3}
+.feed .ph{flex-wrap:wrap;row-gap:4px}
+.feed,.logs,.bizp{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.s2fill{display:flex;flex-direction:column;min-height:0;flex:1}
+.s2list{flex:1;min-height:0}
+.ev2{display:flex;gap:12px;align-items:flex-start;padding:12px 0;border-top:1px solid rgba(var(--a),.09)}
+.ev2:first-child{border-top:0}
+.ev2 .dot{margin-top:6px}.ev2 .tt{font-family:var(--font-mono);font-size:12px;color:var(--muted);width:62px;flex:none;padding-top:2px}
+.ev2 .ea{font-family:var(--font-hd);font-weight:700;font-size:17px}.ev2 .ea small{font-family:var(--font-ui);font-weight:400;font-size:12px}
+.ev2 .eb{font-size:13.5px;color:var(--muted);margin-top:2px}
+.bay{position:relative;min-height:0}
+.bay i{position:absolute;width:22px;height:22px;border-color:rgba(var(--a),.6);border-style:solid}
+.bay .c1{top:0;left:0;border-width:2px 0 0 2px}.bay .c2{top:0;right:0;border-width:2px 2px 0 0}.bay .c3{bottom:0;left:0;border-width:0 0 2px 2px}.bay .c4{bottom:0;right:0;border-width:0 2px 2px 0}
+.baylbl{position:absolute;left:18px;top:14px;display:flex;flex-direction:column;gap:4px;z-index:1}
+.slot{min-height:0}
+.logs{font-family:var(--font-mono);font-size:12.5px}
+.lg{display:grid;grid-template-columns:76px 64px minmax(0,1fr);gap:10px;padding:7px 0;border-top:1px solid rgba(var(--a),.07);white-space:nowrap}
+.lg .lt{color:var(--dim)}.lg .lk{text-transform:uppercase;letter-spacing:.08em;color:var(--acc)}.lg .lk.ok{color:rgb(var(--ok))}.lg .lk.warn{color:rgb(var(--warn))}.lg .lk.bad{color:rgb(var(--bad))}
+.lg .lm{color:var(--text);overflow:hidden;text-overflow:ellipsis}
+.bk{display:grid;grid-template-columns:1fr 1fr;gap:14px 20px;margin-top:12px}
+/* one window across two monitors: screen 1 on the left, screen 2 on the right */
+@media (min-aspect-ratio:23/10) and (min-width:2200px){
+  .screen{display:grid;grid-template-columns:1fr 1fr}
+  .s2{display:flex;flex-direction:column;height:100vh;height:100dvh}
+  .s1 .bottom .fut{display:none}
+  .s1 .bottom{grid-template-columns:minmax(0,1fr)}
+}
+/* ?screen=2: its own window on the second monitor */
+html[data-n3d-screen="2"] .s1{display:none}
+html[data-n3d-screen="2"] .screen{display:block}
+html[data-n3d-screen="2"] .s2{display:flex;flex-direction:column;height:100vh;height:100dvh}
+html[data-n3d-screen="2"] .tabs{display:none}
+@media (max-width:1240px){ .grid2{grid-template-columns:1fr 1fr;grid-template-rows:auto} .feed{grid-row:auto} html[data-n3d-screen="2"] .s2{height:auto} .bay{min-height:320px} }
+
+/* in-between desktop widths: give the node labels room */
+@media (max-width:1500px) and (min-width:1241px){ html.n3d-on .ringwrap .side{display:none} }
+/* phone */
+@media (max-width:760px){
+  html.n3d-on .ringwrap{flex-direction:column;align-items:center;gap:6px}
+  html.n3d-on .ring{width:260px;height:260px;margin:6px auto 0}
+  html.n3d-on .mini{flex-direction:row;justify-content:space-around;width:100%;text-align:center;margin-top:22px}
+  html.n3d-on .clock3d b{font-size:30px}
+  .holo{width:62px;height:62px}
+  .s2btn{display:none}
 }

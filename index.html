@@ -18,14 +18,30 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preload" href="fonts/rajdhani-bold.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="fonts/inter.woff2" as="font" type="font/woff2" crossorigin>
+<script src="js/n3d-config.js"></script>
+<link rel="stylesheet" href="3d/nova-3d.css">
 <link rel="stylesheet" href="css/nova.css">
 </head>
 <body>
 <div class="screen" id="screen">
-  <!-- 3D hook: full-screen three.js canvas that sits behind every panel (filled in by js/nova-3d.js when present) -->
+  <!-- 3D layer (3d/nova-3d.min.js): full-screen three.js canvas behind every panel -->
   <canvas id="nova-3d" aria-hidden="true"></canvas>
-  <header class="topbar layer" id="topbar"></header>
-  <main class="view" id="view"></main>
+  <div class="s1" id="s1">
+    <header class="topbar layer" id="topbar"></header>
+    <main class="view" id="view"></main>
+  </div>
+  <!-- Screen 2 · Operations: right half of a wide two-monitor window, or its own window via ?screen=2 -->
+  <aside class="s2 layer" id="s2" aria-label="Screen 2 · Operations">
+    <header class="topbar s2bar" id="s2bar"></header>
+    <div class="grid2">
+      <section class="panel feed"><div id="s2-feed" class="s2fill"></div></section>
+      <section class="bay" data-n3d-bay><div class="baylbl"><span class="label">Holo bay</span><span class="mutedt sm" id="s2-baylbl">Calo · phone + guide preview</span></div><i class="c1"></i><i class="c2"></i><i class="c3"></i><i class="c4"></i></section>
+      <section class="panel slot" data-n3d-detail-slot><div class="ph"><h3>Focus<small>from the core</small></h3><span class="meta">Esc to go back</span></div>
+        <p class="mutedt" style="font-size:15px">Pick a node on the core (AI Team, GitHub, Tasks, Calo App or Business) and its details open here.</p></section>
+      <section class="panel logs"><div id="s2-logs" class="s2fill"></div></section>
+      <section class="panel bizp"><div id="s2-biz" class="s2fill"></div></section>
+    </div>
+  </aside>
   <nav class="tabs" id="tabs" aria-label="Sections"></nav>
 </div>
 <div class="lock" id="lock" hidden>
@@ -42,6 +58,7 @@
   </div>
 </div>
 <div id="sheet"></div>
+<script src="3d/nova-3d.min.js" defer></script>
 <script type="module" src="js/app.js"></script>
 </body>
 </html>
