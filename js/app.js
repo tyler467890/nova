@@ -275,7 +275,7 @@ function futureCards() {
 }
 function askBar(short) {
   const link = safeUrl(GROK_APP_URL);
-  const inner = `${ic('bolt', short ? 18 : 22)}<span class="ph2">${short ? 'Ask your team…' : 'Ask your team…  e.g. “What’s left before the Etsy launch?”'}</span><span class="mic">${ic('mic', short ? 18 : 22)}</span>`;
+  const inner = `${ic('bolt', short ? 18 : 22)}<span class="ph2"><span class="long">Ask your team…  e.g. “What’s left before the Etsy launch?”</span><span class="short">Ask your team…</span></span><span class="mic">${ic('mic', short ? 18 : 22)}</span>`;
   return link ? `<a class="cmd" href="${esc(link)}" target="_blank" rel="noopener">${inner}</a>`
     : `<button class="cmd" type="button" data-ask aria-describedby="asktip">${inner}<span class="tip" id="asktip" role="tooltip">Coming soon: chat from NOVA</span></button>`;
 }

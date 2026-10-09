@@ -379,3 +379,18 @@ main.view{position:relative;z-index:1}
 main.view{perspective:1800px;perspective-origin:50% 40%}
 .panel,.agent,.tool .ic{transform-style:preserve-3d}
 .panel{--rx:0deg;--ry:0deg;--tz:0px;transform:translateZ(var(--tz)) rotateX(var(--rx)) rotateY(var(--ry))}
+
+/* ---------- layout refinements ---------- */
+.rightcol .gh{flex:0 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.rightcol .gh .prs{flex:0 1 auto;min-height:56px;max-height:200px}
+.rightcol .tasks{min-height:300px}
+.team .agent{padding:10px 14px}
+.team .alist{gap:7px}
+.wm span{color:rgba(64,214,255,.05);-webkit-text-stroke:1.2px rgba(64,214,255,.16)}
+.ph2 .short{display:none}
+@media (max-width:760px){
+  .calo .bun svg{width:62px;height:62px;animation:none}
+  .ph2 .long{display:none}.ph2 .short{display:inline}
+  .rightcol .gh{overflow:visible}.rightcol .gh .prs{max-height:none}
+  .rightcol .tasks{min-height:0}
+}
