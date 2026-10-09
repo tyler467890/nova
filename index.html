@@ -30,16 +30,23 @@
     <header class="topbar layer" id="topbar"></header>
     <main class="view" id="view"></main>
   </div>
-  <!-- Screen 2 · Operations: right half of a wide two-monitor window, or its own window via ?screen=2 -->
-  <aside class="s2 layer" id="s2" aria-label="Screen 2 · Operations">
+  <!-- Screens 2 and 3 (own windows via ?screen=2 / ?screen=3, or the right half of one stretched window).
+       data-role on <html> picks which panels show: team (screen 2 of 3), build (screen 3), merged (screen 2 of 2). -->
+  <aside class="s2 layer" id="s2" aria-label="NOVA screen">
     <header class="topbar s2bar" id="s2bar"></header>
-    <div class="grid2">
-      <section class="panel feed"><div id="s2-feed" class="s2fill"></div></section>
-      <section class="bay" data-n3d-bay><div class="baylbl"><span class="label">Holo bay</span><span class="mutedt sm" id="s2-baylbl">Calo · phone + guide preview</span></div><i class="c1"></i><i class="c2"></i><i class="c3"></i><i class="c4"></i></section>
-      <section class="panel slot" data-n3d-detail-slot><div class="ph"><h3>Focus<small>from the core</small></h3><span class="meta">Esc to go back</span></div>
-        <p class="mutedt" style="font-size:15px">Pick a node on the core (AI Team, GitHub, Tasks, Calo App or Business) and its details open here.</p></section>
-      <section class="panel logs"><div id="s2-logs" class="s2fill"></div></section>
-      <section class="panel bizp"><div id="s2-biz" class="s2fill"></div></section>
+    <div class="grid2" id="grid2">
+      <section class="panel p-agents" data-area="team"><div id="x-agents" class="s2fill"></div></section>
+      <section class="panel p-detail" data-n3d-detail-slot><div id="x-detail" class="s2fill"></div></section>
+      <section class="panel p-logs"><div id="x-logs" class="s2fill"></div></section>
+      <section class="panel p-code"><div id="x-code" class="s2fill"></div></section>
+      <section class="panel p-gh" data-area="github"><div id="x-gh" class="s2fill"></div></section>
+      <section class="p-calo" data-area="calo">
+        <div class="bay" data-n3d-bay><div class="baylbl"><span class="label">Calo hologram</span><span class="mutedt sm" id="x-baylbl">Calo · phone + guide preview</span></div><i class="c1"></i><i class="c2"></i><i class="c3"></i><i class="c4"></i></div>
+        <div class="panel calostat"><div id="x-calo" class="s2fill"></div></div>
+      </section>
+      <section class="panel p-tasks" data-area="tasks"><div id="x-tasks" class="s2fill"></div></section>
+      <section class="panel p-biz" data-area="business"><div id="x-biz" class="s2fill"></div></section>
+      <section class="panel p-dock"><div id="x-dock" class="dockrow"></div></section>
     </div>
   </aside>
   <nav class="tabs" id="tabs" aria-label="Sections"></nav>

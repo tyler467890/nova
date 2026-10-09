@@ -458,8 +458,6 @@ html[data-n3d-layout="wide"] .greet,html[data-n3d-layout="wide"] .side{opacity:c
 .holo{position:relative;width:9.375rem;height:9.375rem;display:grid;place-items:center}
 .holo.big{width:13.75rem;height:13.75rem}
 .holo-host{position:absolute;inset:-0.375rem}
-.s2btn{color:var(--acc2);border-color:rgba(var(--a),.25)}
-html[data-n3d-layout="wide"] .s2btn,html[data-n3d-screen="2"] .s2btn{display:none}
 
 /* focus detail body (real data) */
 .n3d-detail{background:linear-gradient(160deg,rgba(14,44,68,.80),rgba(4,16,28,.88))}
@@ -474,41 +472,156 @@ html[data-n3d-layout="wide"] .s2btn,html[data-n3d-screen="2"] .s2btn{display:non
 .n3d-detail-body .dfoot{margin-top:0.75rem}
 .n3d-detail-body .tasks-row{font-size:0.9375rem}
 
-/* ---------- screen 2 · operations ---------- */
+/* ---------- screens 2 and 3 (Team · Build & Business) ---------- */
 .s2bar .pill.link .dot{background:var(--dim);box-shadow:none}
 .s2bar .pill.link.on .dot{background:rgb(var(--ok));box-shadow:0 0 0.5rem rgb(var(--ok))}
-.grid2{flex:1;min-height:0;display:grid;grid-template-columns:minmax(23.75rem,31.25rem) minmax(0,1fr) minmax(23.75rem,29.375rem);grid-template-rows:minmax(0,1.05fr) minmax(0,1fr);gap:1.375rem 1.5rem;padding:1.5rem 2rem}
-.feed{grid-row:1/3}
-.feed .ph{flex-wrap:wrap;row-gap:0.25rem}
-.feed,.logs,.bizp{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.grid2{flex:1;min-height:0;display:grid;gap:1.375rem 1.5rem;padding:1.5rem 2rem}
+.grid2>*{min-width:0;min-height:0}
+.grid2>.panel{display:flex;flex-direction:column;overflow:hidden}
+.p-agents{grid-area:agents}.p-detail{grid-area:detail}.p-logs{grid-area:logs}.p-code{grid-area:code}
+.p-gh{grid-area:gh}.p-calo{grid-area:calo}.p-tasks{grid-area:tasks}.p-biz{grid-area:biz}.p-dock{grid-area:dock}
+/* screen 2 of 3: Team */
+#grid2[data-g="team"]{grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) minmax(0,1fr);grid-template-rows:minmax(0,1.1fr) minmax(0,1fr);
+  grid-template-areas:"agents detail code" "agents logs code"}
+#grid2[data-g="team"]>:is(.p-gh,.p-calo,.p-tasks,.p-biz,.p-dock){display:none}
+/* screen 3: Build & Business */
+#grid2[data-g="build"]{grid-template-columns:minmax(0,1.05fr) minmax(0,1.2fr) minmax(0,1fr);grid-template-rows:minmax(0,1fr) minmax(0,1fr) auto;
+  grid-template-areas:"gh calo tasks" "gh calo biz" "dock dock dock"}
+#grid2[data-g="build"]>:is(.p-agents,.p-detail,.p-logs,.p-code){display:none}
+/* screen 2 of 2 (or the right half of a stretched window): Team + Build & Business together */
+#grid2[data-g="merged"]{grid-template-columns:minmax(0,1fr) minmax(0,1.1fr) minmax(0,1fr) minmax(0,.95fr);grid-template-rows:minmax(0,1fr) minmax(0,1fr) auto;
+  grid-template-areas:"agents detail gh calo" "agents code gh tasks" "dock dock biz biz";gap:1.1rem 1.2rem}
+#grid2[data-g="merged"]>.p-logs{display:none}
 .s2fill{display:flex;flex-direction:column;min-height:0;flex:1}
 .s2list{flex:1;min-height:0}
+.agent.sel{border-color:var(--acc);background:rgba(var(--a),.10);box-shadow:inset .19rem 0 0 var(--acc)}
+.p-agents .alist{gap:.45rem}
 .ev2{display:flex;gap:0.75rem;align-items:flex-start;padding:0.75rem 0;border-top:1px solid rgba(var(--a),.09)}
-.ev2:first-child{border-top:0}
-.ev2 .dot{margin-top:0.375rem}.ev2 .tt{font-family:var(--font-mono);font-size:0.75rem;color:var(--muted);width:3.875rem;flex:none;padding-top:2px}
-.ev2 .ea{font-family:var(--font-hd);font-weight:700;font-size:1.0625rem}.ev2 .ea small{font-family:var(--font-ui);font-weight:400;font-size:0.75rem}
-.ev2 .eb{font-size:0.8438rem;color:var(--muted);margin-top:2px}
-.bay{position:relative;min-height:0}
-.bay i{position:absolute;width:1.375rem;height:1.375rem;border-color:rgba(var(--a),.6);border-style:solid}
-.bay .c1{top:0;left:0;border-width:2px 0 0 2px}.bay .c2{top:0;right:0;border-width:2px 2px 0 0}.bay .c3{bottom:0;left:0;border-width:0 0 2px 2px}.bay .c4{bottom:0;right:0;border-width:0 2px 2px 0}
-.baylbl{position:absolute;left:1.125rem;top:0.875rem;display:flex;flex-direction:column;gap:0.25rem;z-index:1}
-.slot{min-height:0}
-.logs{font-family:var(--font-mono);font-size:0.7812rem}
+.p-logs{font-family:var(--font-mono);font-size:0.7812rem}
 .lg{display:grid;grid-template-columns:4.75rem 4rem minmax(0,1fr);gap:0.625rem;padding:0.4375rem 0;border-top:1px solid rgba(var(--a),.07);white-space:nowrap}
 .lg .lt{color:var(--dim)}.lg .lk{text-transform:uppercase;letter-spacing:.08em;color:var(--acc)}.lg .lk.ok{color:rgb(var(--ok))}.lg .lk.warn{color:rgb(var(--warn))}.lg .lk.bad{color:rgb(var(--bad))}
 .lg .lm{color:var(--text);overflow:hidden;text-overflow:ellipsis}
-.bk{display:grid;grid-template-columns:1fr 1fr;gap:0.875rem 1.25rem;margin-top:0.75rem}
-/* one window across two monitors: screen 1 on the left, screen 2 on the right */
-html[data-n3d-layout="wide"]:not([data-n3d-screen="2"]) .screen{display:grid;grid-template-columns:var(--split-a,1fr) minmax(0,1fr);height:100vh;height:100dvh}
-html[data-n3d-layout="wide"]:not([data-n3d-screen="2"]) .s2{display:flex;flex-direction:column;height:100vh;height:100dvh;min-width:0}
-html[data-n3d-layout="wide"] .s1 .bottom .fut{display:none}
-html[data-n3d-layout="wide"] .s1 .bottom{grid-template-columns:minmax(0,1fr)}
-/* ?screen=2: its own window on the second monitor */
-html[data-n3d-screen="2"] .s1{display:none}
-html[data-n3d-screen="2"] .screen{display:block}
-html[data-n3d-screen="2"] .s2{display:flex;flex-direction:column;height:100vh;height:100dvh}
-html[data-n3d-screen="2"] .tabs{display:none}
-@media (max-width:1240px){ .grid2{grid-template-columns:1fr 1fr;grid-template-rows:auto} .feed{grid-row:auto} html[data-n3d-screen="2"] .s2{height:auto} .bay{min-height:20rem} }
+/* selected agent (the focus slot: core picks on screen 1 open on top of this panel) */
+.dhead{display:flex;align-items:center;gap:1.25rem;flex:none}
+.dhead .tring{width:5.5rem;height:5.5rem}
+.rpct{font-family:var(--font-dp);font-weight:600;font-size:1rem}
+.dt{font-family:var(--font-hd);font-weight:700;font-size:2rem;line-height:1.1}
+.dtask{font-size:1rem;margin-top:.2rem;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.dfacts{display:flex;align-items:center;gap:.7rem;margin-top:.65rem;flex-wrap:wrap}
+.dfacts .btn{margin:0}
+.dlbl{display:flex;align-items:center;justify-content:space-between;margin:1.1rem 0 .2rem;flex:none}
+.dnote{display:flex;align-items:center;gap:.5rem;margin-top:.6rem;flex:none}
+.rrow{display:grid;grid-template-columns:3.4rem minmax(0,1fr);gap:.6rem;padding:.55rem 0;border-top:1px solid rgba(var(--a),.08);font-size:.875rem}
+.rrow:first-child{border-top:0}
+.rrow .rt{font-family:var(--font-mono);font-size:.72rem;color:var(--muted);padding-top:.1rem}
+.rtx{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+/* Cursor + Copilot */
+.cgrp{flex:1 1 0;min-height:0;display:flex;flex-direction:column}
+.cgrp+.cgrp{margin-top:.9rem;padding-top:.8rem;border-top:1px solid rgba(var(--a),.14)}
+.glbl{display:flex;align-items:center;gap:.6rem;margin-bottom:.15rem;flex:none}
+.glbl .lnk{margin-left:auto;display:inline-flex;align-items:center;gap:.3rem;letter-spacing:.12em}
+.cgrp .row b,.ghlists .row b{font-weight:600;font-size:.9375rem}
+/* GitHub on the Build screen */
+.dtitle{font-family:var(--font-hd);font-weight:700;font-size:1.375rem;margin:0.25rem 0 2px}
+.ghlists{margin-top:.6rem}
+.ghlists .gl{margin:1rem 0 .15rem}.ghlists .gl:first-child{margin-top:.2rem}
+/* Calo: the hologram bay (drawn on the canvas, so it has no panel background) above the status panel */
+.p-calo{display:flex;flex-direction:column;gap:1rem}
+.bay{position:relative;min-height:0;flex:1 1 55%}
+.bay i{position:absolute;width:1.375rem;height:1.375rem;border-color:rgba(var(--a),.6);border-style:solid}
+.bay .c1{top:0;left:0;border-width:2px 0 0 2px}.bay .c2{top:0;right:0;border-width:2px 2px 0 0}.bay .c3{bottom:0;left:0;border-width:0 0 2px 2px}.bay .c4{bottom:0;right:0;border-width:0 2px 2px 0}
+.baylbl{position:absolute;left:1.125rem;top:0.875rem;display:flex;flex-direction:column;gap:0.25rem;z-index:1}
+.calostat{flex:0 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.calostat .ph{margin-bottom:.6rem}
+.calostat .kv{gap:1.6rem;flex-wrap:nowrap}.calostat .kv .big{font-size:1.5rem}
+.clink{margin:.6rem 0 .2rem}
+.cupd{flex:1;min-height:0;display:flex;flex-direction:column;margin-top:.6rem}
+.cupd .row{padding:.45rem 0}
+.calostat .btns{flex:none;margin-top:.7rem}
+#grid2[data-g="merged"] :is(.cupd,.clink){display:none}
+#grid2[data-g="merged"] .bay{flex-basis:50%}
+/* tasks, business, dock */
+.p-tasks .tl{flex:1;min-height:0}
+.p-tasks .row{font-size:.95rem;padding:.6rem 0}
+.p-tasks .addt{margin-top:auto;border-top:1px dashed rgba(var(--a),.2);padding-top:0.7rem;font-size:0.875rem}
+.bk{display:grid;grid-template-columns:1fr 1fr;gap:.8rem;margin-top:.2rem}
+.bcell{display:flex;gap:.7rem;align-items:flex-start;padding:.8rem .9rem;border:1px dashed rgba(var(--a),.25);border-radius:.375rem}
+.bcell .big{font-size:1.6rem;margin:.3rem 0 .1rem}
+.bnote{margin-top:auto;padding-top:.7rem}
+#grid2[data-g="merged"] .p-biz{padding:.8rem 1.1rem}
+#grid2[data-g="merged"] .p-biz .ph{margin-bottom:.4rem}
+#grid2[data-g="merged"] .p-biz .bk{grid-template-columns:repeat(4,minmax(0,1fr));gap:.5rem;margin:0}
+#grid2[data-g="merged"] .p-biz :is(.bnote,.bcell svg,.bcell .sm){display:none}
+#grid2[data-g="merged"] .p-biz .bcell{padding:.4rem .6rem}
+#grid2[data-g="merged"] .p-biz .bcell .big{font-size:1.15rem;margin:.15rem 0 0}
+.p-dock{padding:.8rem 1.4rem}
+.dockrow{display:flex;align-items:center;justify-content:space-between;gap:.375rem;width:100%}
+.dockrow .vlabel{writing-mode:vertical-rl;transform:rotate(180deg)}
+/* a node picked on screen 1 lights up its panel on the other screens */
+#s2 .panel.hl,#s2 .p-calo.hl .calostat{border-color:var(--acc);box-shadow:0 0 0 1px rgba(var(--a),.45),0 0 1.6rem rgba(var(--a),.3),inset 0 0 2.5rem rgba(var(--a),.06)}
+#s2 .p-calo.hl .bay i{border-color:var(--acc)}
+.mark.pflash{animation:pflash .9s ease-out}
+@keyframes pflash{30%{filter:drop-shadow(0 0 .8rem var(--acc)) brightness(1.8)}}
+/* one window across two monitors: screen 1 on the left, Team + Build on the right */
+html[data-n3d-layout="wide"][data-n3d-screen="1"] .screen{display:grid;grid-template-columns:var(--split-a,1fr) minmax(0,1fr);height:100vh;height:100dvh}
+html[data-n3d-layout="wide"][data-n3d-screen="1"] .s2{display:flex;flex-direction:column;height:100vh;height:100dvh;min-width:0}
+/* ?screen=2 / ?screen=3: their own window on another monitor */
+html:not([data-n3d-screen="1"]) .s1{display:none}
+html:not([data-n3d-screen="1"]) .screen{display:block}
+html:not([data-n3d-screen="1"]) .s2{display:flex;flex-direction:column;height:100vh;height:100dvh}
+html:not([data-n3d-screen="1"]) .tabs{display:none}
+#nova-3d.n3d-lite{background:transparent}
+
+/* ---------- screen 1 · Command (two or three screens): the core, the Ask bar and what needs you ---------- */
+.cmdv{display:grid;grid-template-columns:minmax(17rem,24rem) minmax(0,1fr) minmax(17rem,25rem);gap:1.5rem 2rem;padding:1.5rem 2rem;height:calc(100vh - 4.5rem);height:calc(100dvh - 4.5rem)}
+.cmdv>*{min-height:0;min-width:0}
+.cmdv .center{gap:0}
+.cmdv .core .cmd{width:min(44rem,100%)}
+.cmdv .ringwrap{gap:0}
+.statp{display:flex;flex-direction:column}
+.slist{display:flex;flex-direction:column;flex:1;min-height:0}
+.srow{display:flex;align-items:center;gap:.8rem;padding:.85rem 0;border-top:1px solid rgba(var(--a),.09)}
+.srow:first-child{border-top:0}
+.sk{font-family:var(--font-mono);font-size:.72rem;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+.ss{font-size:.8rem;color:var(--dim);margin-top:.15rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sv{font-family:var(--font-hd);font-weight:700;font-size:1.45rem;white-space:nowrap}
+.scrbox{flex:none;border-top:1px dashed rgba(var(--a),.25);padding-top:.9rem;display:flex;flex-direction:column;gap:.55rem;align-items:flex-start}
+.scrbox .btn{margin:0}
+.rcolc{display:flex;flex-direction:column;gap:1.5rem}
+.needc{flex:1 1 55%;display:flex;flex-direction:column;min-height:0}
+.replp{flex:1 1 45%;display:flex;flex-direction:column;min-height:0}
+.nlist,.rlist{flex:1;min-height:0}
+.needc .approve .btns{margin-top:.7rem}
+.allclear{display:flex;align-items:center;gap:1rem;padding:1.2rem .2rem}
+.allclear b{font-family:var(--font-hd);font-size:1.2rem;letter-spacing:.04em}
+.amodal{width:min(46rem,100%)!important}
+.amodal .head{margin:0;background:none;border:0;box-shadow:none;padding:.5rem}
+.amodal .head::before,.amodal .head::after{display:none}
+/* screen chips in the top bar */
+.chips{display:flex;gap:.5rem;align-items:center}
+.chip{display:inline-flex;align-items:center;gap:.5rem;padding:.3rem .85rem .3rem .3rem;border:1px solid rgba(255,255,255,.1);border-radius:62rem;font-family:var(--font-mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);cursor:default;white-space:nowrap}
+.chip b{width:1.6rem;height:1.6rem;border-radius:50%;display:grid;place-items:center;border:1px solid currentColor;font-family:var(--font-dp);font-size:.75rem;letter-spacing:0}
+.chip.on{color:var(--acc2);border-color:rgba(var(--a),.4)}
+.chip.on b{background:rgba(var(--a),.16);box-shadow:0 0 .6rem rgba(var(--a),.45)}
+.chip.me{border-color:var(--acc);color:var(--text)}
+.chip.unused{opacity:.4}
+.chip[data-openscr]{cursor:pointer}.chip[data-openscr]:hover{color:var(--text);border-color:var(--line)}
+.setupbtn{color:var(--acc2);border-color:rgba(var(--a),.3)}
+/* the big "Screen 2 · Team" label shown for a few seconds when a screen opens */
+.scrlabel{position:fixed;inset:0;z-index:60;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1rem;pointer-events:none;
+  background:radial-gradient(closest-side,rgba(3,8,15,.55),transparent);animation:scrl 4.6s ease forwards}
+.scrlabel b{font-family:var(--font-dp);font-weight:700;font-size:min(36vh,22rem);line-height:.9;color:rgba(var(--a),.08);-webkit-text-stroke:2px rgba(var(--a),.5);text-shadow:0 0 3rem rgba(var(--a),.3)}
+.scrlabel span{font-family:var(--font-hd);font-weight:700;font-size:2.1rem;letter-spacing:.3em;text-transform:uppercase;color:var(--acc2);text-shadow:0 0 1.2rem rgba(var(--a),.6)}
+@keyframes scrl{0%{opacity:0;transform:scale(.97)}10%{opacity:1;transform:none}78%{opacity:1}100%{opacity:0}}
+details.adv{margin-top:.8rem}
+details.adv summary{cursor:pointer;color:var(--muted);font-size:.9rem}
+@media (max-width:1240px){
+  .grid2{grid-template-areas:none!important;grid-template-columns:1fr 1fr!important;grid-template-rows:auto!important}
+  .grid2>*{grid-area:auto!important;min-height:20rem}.grid2>.p-dock,.grid2>.p-biz{min-height:0;grid-column:1/-1}
+  html:not([data-n3d-screen="1"]) .s2{height:auto}
+  .cmdv{grid-template-columns:1fr 1fr;height:auto}.cmdv .center{grid-column:1/-1;order:-1}.cmdv .core{min-height:40rem}
+  .chips .chip span{display:none}
+}
 
 /* in-between desktop widths: give the node labels room */
 @media (max-width:1500px) and (min-width:1241px){ html.n3d-on .ringwrap .side{display:none} }
@@ -519,7 +632,7 @@ html[data-n3d-screen="2"] .tabs{display:none}
   html.n3d-on .mini{flex-direction:row;justify-content:space-around;width:100%;text-align:center;margin-top:1.375rem}
   html.n3d-on .clock3d b{font-size:1.875rem}
   .holo{width:3.875rem;height:3.875rem}
-  .s2btn{display:none}
+  .setupbtn,.chips{display:none}
 }
 
 /* ---------- v1.3 · fit every screen (one window per monitor) ----------
@@ -627,3 +740,20 @@ kbd.k{font-family:var(--font-mono);font-size:.8em;border:1px solid rgba(255,255,
   .grid2{grid-template-columns:1fr}
   .topbar,.tright{min-width:0;flex-wrap:wrap}
 }
+
+/* ---------- v1.4 · three screens: sizes ---------- */
+@media (min-width:1241px){
+  .cmdv{height:100%}
+  .cmdv .ring{width:min(30rem,calc(100cqh - 12.6rem),calc(100cqw - 17rem));height:min(30rem,calc(100cqh - 12.6rem),calc(100cqw - 17rem))}
+}
+@media (min-width:1241px) and (max-height:820px){
+  .cmdv{gap:.9rem 1.2rem;padding:.9rem 1.4rem}
+  .rcolc{gap:.9rem}
+  .srow{padding:.6rem 0}
+  #grid2[data-g="merged"]{gap:.8rem .9rem}
+  .p-calo{gap:.7rem}
+  .dhead .tring{width:4.6rem;height:4.6rem}
+}
+@media (min-width:1241px) and (max-width:1700px){ .chip{padding-right:.6rem} }
+@media (min-width:1241px) and (max-width:1450px){ .chips .chip:not(.me) span{display:none} .chip{padding-right:.3rem} }
+#grid2[data-g="merged"] #x-baylbl{display:none}

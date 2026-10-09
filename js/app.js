@@ -2,7 +2,7 @@
 // Private data lives only in data/status.enc.json (AES-GCM, PBKDF2-SHA256 key from a passphrase).
 // Live data: public GitHub REST API (no token) and the public Calo site.
 
-import { cmdBar, repliesStrip, apiLogin, apiLogout, refreshConn, openConnections, conn } from './connect.js';
+import { cmdBar, repliesStrip, apiLogin, apiLogout, refreshConn, openConnections, conn, api, isOn } from './connect.js';
 
 const REPO = 'tyler467890/student-day-planner';
 const CALO = 'https://tyler467890.github.io/student-day-planner/';
@@ -26,7 +26,7 @@ const state = {
   gh: lsGet(LS.gh) || { cache: {}, prs: null, run: null, commit: null, fetchedAt: 0, error: '', rateResetAt: 0 },
   calo: lsGet(LS.calo) || { checkedAt: 0, online: null },
 };
-window.NOVA = { state, conn, version: '1.3.0' }; // read-only hook for add-on layers (e.g. a 3D renderer)
+window.NOVA = { state, conn, version: '1.4.0', get screen() { return SCR; }, get role() { return ROLE; } }; // read-only hook for add-on layers and tests
 const emit = (name, detail) => window.dispatchEvent(new CustomEvent('nova:' + name, { detail }));
 
 // ---------- time ----------
@@ -228,38 +228,39 @@ function caloPanel() {
     ${up.length ? up.map((u) => `<div class="row"><span class="dot"></span><div class="grow"><b>${esc(u.title)}</b><div class="mutedt sm">${esc(dayLabel(u.time))}</div></div></div>`).join('') : '<div class="empty">No updates yet</div>'}
    </div></div>`;
 }
-function ghPanel(full = false) {
-  const g = state.gh, r = g.run, cm = g.commit;
-  const rs = runState();
+function ghPanel(full = false) { return `<div class="panel gh">${ghInner(full)}</div>`; }
+function ghTop() {
+  const g = state.gh, r = g.run, rs = runState();
   const center = rs === 'ok' ? ic('check', 28, COL.ok, 2.4) : rs === 'bad' ? ic('alert', 26, COL.bad, 2) : rs === 'warn' ? ic('clock', 26, COL.warn, 2) : '<span class="mono dimt">…</span>';
   const runTitle = !r ? (g.error ? 'GitHub unavailable' : 'Loading…') : r.status !== 'completed' ? 'Deploying now…' : r.conclusion === 'success' ? 'Pages deploy live' : 'Deploy ' + esc(r.conclusion || 'failed');
-  const prs = g.prs || [];
-  const err = g.error ? `<div class="mutedt sm" style="margin-top:0.625rem">${ic('alert', 14, COL.warn)} ${esc(g.error)}</div>` : '';
-  return `<div class="panel gh">
-   <div class="ph"><h3>GitHub<small>student-day-planner</small></h3><a href="https://github.com/${REPO}" target="_blank" rel="noopener" title="Open repo on GitHub">${ic('branch', 20)}</a></div>
+  return `<div class="ph"><h3>GitHub<small>student-day-planner</small></h3><a href="https://github.com/${REPO}" target="_blank" rel="noopener" title="Open repo on GitHub">${ic('branch', 20)}</a></div>
    <a class="deploy hov" href="${esc(safeUrl(r && r.html_url) || 'https://github.com/' + REPO + '/actions')}" target="_blank" rel="noopener">
     ${miniRing(100, rs === 'pending' ? 'acc' : rs, center)}
     <div class="grow"><div class="label">Latest deploy${r ? ' · ' + esc(r.name || 'workflow') : ''}</div>
-     <div style="font-family:var(--font-hd);font-weight:700;font-size:1.375rem;margin:0.25rem 0 2px">${runTitle}</div>
-     <div class="mutedt sm">${r ? `<span data-ago="${esc(r.updated_at)}">${esc(ago(r.updated_at))}</span> · run #${esc(r.run_number)}` : '&nbsp;'}</div></div></a>
+     <div class="dtitle">${runTitle}</div>
+     <div class="mutedt sm">${r ? `<span data-ago="${esc(r.updated_at)}">${esc(ago(r.updated_at))}</span> · run #${esc(r.run_number)}` : '&nbsp;'}</div></div></a>`;
+}
+function ghInner(full = false) {
+  const g = state.gh, cm = g.commit, prs = g.prs || [];
+  const err = g.error ? `<div class="mutedt sm" style="margin-top:0.625rem">${ic('alert', 14, COL.warn)} ${esc(g.error)}</div>` : '';
+  return `${ghTop()}
    ${cm ? `<a class="row hov" style="border-top:1px solid rgba(64,214,255,.09);margin-top:0.875rem" href="${esc(safeUrl(cm.html_url))}" target="_blank" rel="noopener">${ic('commit', 18)}<div class="grow"><b class="ell" style="display:block">${esc(cm.message)}</b><div class="mutedt sm"><span class="mono">${esc(cm.sha)}</span> · ${esc(cm.author || '')} · <span data-ago="${esc(cm.date)}">${esc(ago(cm.date))}</span></div></div></a>` : ''}
    <div class="label" style="margin:1rem 0 0.25rem">Open pull requests · ${g.prs ? prs.length : '…'}</div>
    <div class="prs scroll" ${full ? 'style="max-height:none"' : ''}>
-    ${g.prs ? (prs.length ? prs.map((p) => `<a class="row pr hov" href="${esc(safeUrl(p.html_url))}" target="_blank" rel="noopener"><span class="num acc">#${esc(p.number)}</span><div class="grow"><b class="ell" style="display:block">${esc(p.title)}</b><div class="mutedt sm">Updated <span data-ago="${esc(p.updated_at)}">${esc(ago(p.updated_at))}</span></div></div>${p.draft ? '<span class="badge dim">Draft</span>' : '<span class="badge acc">Ready</span>'}</a>`).join('') : '<div class="empty">No open pull requests</div>') : '<div class="empty">Loading…</div>'}
+    ${g.prs ? (prs.length ? prs.map(prRow).join('') : '<div class="empty">No open pull requests</div>') : '<div class="empty">Loading…</div>'}
    </div>
    ${err}
-   <div class="foot"><span>${g.fetchedAt ? 'Synced <span data-ago="' + g.fetchedAt + '">' + esc(ago(g.fetchedAt)) + '</span>' : ''}</span><span>Refreshes every 5 min</span></div>
-  </div>`;
+   <div class="foot"><span>${g.fetchedAt ? 'Synced <span data-ago="' + g.fetchedAt + '">' + esc(ago(g.fetchedAt)) + '</span>' : ''}</span><span>Refreshes every 5 min</span></div>`;
 }
-function tasksPanel(limit) {
+const prRow = (p) => `<a class="row pr hov" href="${esc(safeUrl(p.html_url))}" target="_blank" rel="noopener"><span class="num acc">#${esc(p.number)}</span><div class="grow"><b class="ell" style="display:block">${esc(p.title)}</b><div class="mutedt sm">Updated <span data-ago="${esc(p.updated_at)}">${esc(ago(p.updated_at))}</span></div></div>${p.draft ? '<span class="badge dim">Draft</span>' : '<span class="badge acc">Ready</span>'}</a>`;
+function tasksPanel(limit) { return `<div class="panel tasks">${tasksInner(limit)}</div>`; }
+function tasksInner(limit) {
   const t = tasks(), done = t.filter((x) => x.done).length;
   const list = limit ? t.filter((x) => !x.done).slice(0, limit) : t;
-  return `<div class="panel tasks">
-   <div class="ph"><h3>Today<small>Notion tasks</small></h3><span class="meta">${t.length ? `${done} of ${t.length} done` : ''}</span></div>
+  return `<div class="ph"><h3>Today<small>Notion tasks</small></h3><span class="meta">${t.length ? `${done} of ${t.length} done` : ''}</span></div>
    <div class="tl scroll">${t.length ? list.map((x) => { const u = safeUrl(x.link); const inner = `<span class="chk ${x.done ? 'done' : ''}"></span><span class="${x.done ? 'strike' : ''}">${esc(x.title)}</span>`;
       return u ? `<a class="row hov" href="${esc(u)}" target="_blank" rel="noopener">${inner}</a>` : `<div class="row">${inner}</div>`; }).join('') : `<div class="empty">${state.statusErr ? esc(state.statusErr) : 'Decrypting tasks…'}</div>`}</div>
-   <a class="row addt desk-only" href="${NOTION_TASKS}" target="_blank" rel="noopener"><span class="acc" style="font-size:1.25rem;line-height:1">+</span><span class="mutedt">Open tasks in Notion</span></a>
-  </div>`;
+   <a class="row addt desk-only" href="${NOTION_TASKS}" target="_blank" rel="noopener"><span class="acc" style="font-size:1.25rem;line-height:1">+</span><span class="mutedt">Open tasks in Notion</span></a>`;
 }
 const TOOLS = [
   ['code', 'VS Code', 'https://vscode.dev', 'Open VS Code for the Web'],
@@ -269,10 +270,10 @@ const TOOLS = [
   ['notes', 'Notion', 'https://app.notion.com', 'Notion'],
   ['spark', 'Muse', '', 'Muse link not set yet (placeholder)'],
 ];
-function dock() {
-  return `<div class="panel dock"><div class="label vlabel">Quick launch</div>
-   ${TOOLS.map(([i, l, u, t]) => u ? `<a class="tool" href="${u}" target="_blank" rel="noopener" title="${esc(t)}">${hexIc(i)}<span>${l}</span></a>` : `<span class="tool ph-link" title="${esc(t)}">${hexIc(i)}<span>${l}</span><em class="tag">Soon</em></span>`).join('')}
-  </div>`;
+function dock() { return `<div class="panel dock">${dockInner()}</div>`; }
+function dockInner() {
+  return `<div class="label vlabel">Quick launch</div>
+   ${TOOLS.map(([i, l, u, t]) => u ? `<a class="tool" href="${u}" target="_blank" rel="noopener" title="${esc(t)}">${hexIc(i)}<span>${l}</span></a>` : `<span class="tool ph-link" title="${esc(t)}">${hexIc(i)}<span>${l}</span><em class="tag">Soon</em></span>`).join('')}`;
 }
 function futureCards() {
   return [['Sales & Profit', 'chart', 'Etsy revenue · orders'], ['Ads', 'bolt', 'Spend · clicks · conversions'], ['Email', 'mail', 'Unread · top messages']].map(([t, i, s]) => `
@@ -287,6 +288,162 @@ function needPanel() {
    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.375rem"><span class="badge warn">${n.length} need${n.length === 1 ? 's' : ''} you</span><span class="mutedt" style="font-size:0.75rem">Tap to review</span></div>
    ${n.map((a) => `<button class="row" style="width:100%;border:0;padding:0.3125rem 0;text-align:left" data-agent="${agents().indexOf(a)}"><span class="dot warn"></span><b style="font-family:var(--font-hd);font-size:1rem;white-space:nowrap">${esc(a.name)}</b><span class="mutedt ell" style="margin-left:auto;font-size:0.7812rem">${esc(a.task || '')}</span></button>`).join('')}
   </div>`;
+}
+
+// ---------- screen 1 · Command (when NOVA runs on two or three screens) ----------
+const SCREEN_NAMES = { 1: 'Command', 2: 'Team', 3: 'Build & Business' };
+const SCREEN_SHORT = { 1: 'Command', 2: 'Team', 3: 'Build' };
+function roleName() { return ROLE === 'merged' ? 'Team · Build & Business' : ROLE === 'team' ? 'Team' : ROLE === 'build' ? 'Build & Business' : 'Command'; }
+function sysPill() {
+  const sys = systems();
+  return `<span class="pill ${sys.issues.length ? 'warn' : ''}" title="${esc(sys.issues.join(', ') || 'Calo online, deploy OK, team feed decrypted')}"><span class="dot ${sys.issues.length ? 'warn' : 'ok'}"></span>${sys.issues.length ? sys.issues.length + (sys.issues.length === 1 ? ' issue' : ' issues') : 'All systems normal'}</span>`;
+}
+function screenChips() {
+  const want = screensWanted();
+  return [1, 2, 3].map((n) => {
+    const on = alive(n), used = n <= want, me = n === SCR;
+    const tip = `Screen ${n} · ${SCREEN_NAMES[n]}${me ? ' (this window)' : on ? ' · open' : used ? ' · not open yet, click to open' : ' · not used'}`;
+    return `<button class="chip ${on ? 'on' : ''} ${used ? '' : 'unused'} ${me ? 'me' : ''}" ${!on && SCR === 1 ? `data-openscr="${n}"` : ''} title="${esc(tip)}"><b>${n}</b><span>${SCREEN_SHORT[n]}</span></button>`;
+  }).join('');
+}
+const srow = (dot, k, v, sub = '', cls = '') => `<div class="srow"><span class="dot ${dot}"></span><div class="grow"><div class="sk">${k}</div>${sub ? `<div class="ss">${sub}</div>` : ''}</div><div class="sv ${cls}">${v}</div></div>`;
+function statusPanel() {
+  const c = counts(), rs = runState(), r = state.gh.run, cl = state.calo, t = tasks(), done = t.filter((x) => x.done).length;
+  const want = screensWanted(), missing = [2, 3].filter((n) => n <= want && !alive(n));
+  const scr = missing.length ? `<div class="mutedt sm">Screen ${missing.join(' and ')} ${missing.length > 1 ? 'aren’t' : 'isn’t'} open yet.</div><button class="btn sm" data-setup>${ic('monitor', 16, 'currentColor')} Set up screens</button>`
+    : `<div class="mutedt sm">${want > 1 ? `All ${want} screens linked.` : 'One screen.'} <button class="lnkbtn" data-setup>Set up screens</button></div>`;
+  return `<section class="panel statp"><div class="ph"><h3>Status<small>overview</small></h3>${sysPill()}</div>
+   <div class="slist">
+    ${srow(!cl.checkedAt ? 'idle' : cl.online ? 'ok' : 'bad', 'Calo app', !cl.checkedAt ? '…' : cl.online ? 'Online' : 'Offline', cl.version ? 'v' + esc(cl.version) : '', cl.online ? 'okc' : cl.checkedAt ? 'badc' : '')}
+    ${srow(rs === 'ok' ? 'ok' : rs === 'bad' ? 'bad' : rs === 'warn' ? 'warn' : 'idle', 'Last deploy', rs === 'ok' ? 'Success' : rs === 'bad' ? 'Failed' : rs === 'warn' ? 'Running' : '…', r ? `<span data-ago="${esc(r.updated_at)}">${esc(ago(r.updated_at))}</span>` : '', rs === 'ok' ? 'okc' : rs === 'bad' ? 'badc' : '')}
+    ${srow(c.working ? 'pulse' : 'idle', 'AI team', state.status ? `${c.working} / ${c.total}` : '—', 'working')}
+    ${srow(c.need ? 'warn' : 'ok', 'Needs you', state.status ? String(c.need) : '—', c.need ? 'waiting' : 'all clear', c.need ? 'warnc' : '')}
+    ${srow('', 'Tasks today', state.status ? `${done} / ${t.length}` : '—', 'done')}
+    ${srow(conn.session ? 'ok' : 'idle', 'Secure service', conn.session ? 'Signed in' : conn.err ? 'Offline' : 'Connecting…', '', conn.session ? '' : 'dimt')}
+   </div>
+   <div class="scrbox"><div class="label">Screens</div>${scr}</div></section>`;
+}
+function needsPanel() {
+  const n = agents().map((a, i) => [a, i]).filter(([a]) => a.status === 'needs_you');
+  const body = !state.status ? `<div class="empty">${state.statusErr ? esc(state.statusErr) : 'Decrypting…'}</div>`
+    : n.length ? n.map(([a, i]) => { const u = safeUrl(a.link); return `<div class="approve"><div class="label warnc">● ${esc(a.name)} <span class="dimt">· ${esc(KIND[a.kind] || a.kind || 'agent')}</span></div><div class="aq">${esc(a.task || 'Waiting on you')}</div>
+       <div class="btns">${u ? `<a class="btn pri sm" href="${esc(u)}" target="_blank" rel="noopener">Review ${ic('ext', 14, '#1a1206')}</a>` : ''}<button class="btn sm" data-agent="${i}">${alive(2) ? 'Show on screen 2' : 'Details'}</button></div></div>`; }).join('')
+    : `<div class="allclear">${ic('check', 34, COL.ok, 2.2)}<div><b>Nothing is waiting on you</b><div class="mutedt sm">Approvals from your bots show up here.</div></div></div>`;
+  return `<section class="panel needc"><div class="ph"><h3>Needs you<small>approvals</small></h3><span class="meta ${n.length ? 'warnc' : ''}">${state.status ? n.length : ''}</span></div><div class="nlist scroll">${body}</div></section>`;
+}
+function replyRows(list) {
+  return list.map((r) => { const t = Date.parse(r.time); return `<div class="rrow"><span class="rt">${isNaN(t) ? '' : esc(ago(t))}</span><div class="rtx" title="${esc(r.text)}">${esc(r.text)}</div></div>`; }).join('');
+}
+function repliesPanel() {
+  const x = conn.inbox || [];
+  return `<section class="panel replp"><div class="ph"><h3>Replies<small>from your bots</small></h3>${x.length ? `<button class="lnkbtn" data-replies>All ${x.length}</button>` : ''}</div>
+   <div class="rlist scroll">${x.length ? replyRows(x.slice(0, 6)) : `<div class="empty">${conn.session || conn.status ? 'No replies yet. Ask your team with the bar under the core and answers land here.' : conn.err ? esc(conn.err) : 'Connecting to the secure service…'}</div>`}</div></section>`;
+}
+function viewCommand() {
+  const c = counts(), sys = systems();
+  const sub = sys.issues.length ? 'Heads up: ' + sys.issues.join(' · ') + '.' : c.need ? `${c.need === 1 ? 'One thing needs' : c.need + ' things need'} you. Everything else is on track.` : 'Everything is on track.';
+  return `<div class="cmdv">
+   ${statusPanel()}
+   <section class="center"><div class="core" data-n3d-container>
+    <div class="greet"><h1 class="glow"><span data-greet>${greeting()}</span>, Tyler</h1><p>${esc(sub)}</p></div>
+    <div class="ringwrap"><div class="ring" id="core-ring" data-n3d-core title="Drag to rotate · scroll or pinch to zoom · pick a node for details">${coreRing(sys.arcs)}${clock3d()}</div></div>
+    ${cmdBar(false)}
+   </div></section>
+   <section class="rcolc">${needsPanel()}${repliesPanel()}</section>
+  </div>`;
+}
+
+// ---------- screens 2 and 3 (Team · Build & Business) ----------
+function xAgents() {
+  const c = counts(), a = agents(), upd = state.status && state.status.updatedAt;
+  const list = a.map((x, i) => agentCard(x, i).replace('class="agent ', `class="agent ${i === state.selAgent ? 'sel ' : ''}`).replace(' data-agent=', ' data-select=')).join('');
+  return `<div class="ph"><h3>AI Team<small>live</small></h3><span class="meta"><span class="acc">${c.working} working</span>${c.need ? ` · <span class="warnc">${c.need} need${c.need === 1 ? 's' : ''} you</span>` : ''}</span></div>
+   <div class="alist scroll s2list">${list || `<div class="empty">${state.statusErr ? esc(state.statusErr) : 'Decrypting team status…'}</div>`}</div>
+   <div class="foot"><span data-updated>${upd ? 'Updated ' + esc(ago(upd)) : ''}</span><span>${a.length} agents</span></div>`;
+}
+function xDetail() {
+  const a = agents()[state.selAgent] || agents()[0];
+  const hint = '<span class="meta">Core picks open here</span>';
+  if (!a) return `<div class="ph"><h3>Agent</h3>${hint}</div><div class="empty">${state.statusErr ? esc(state.statusErr) : 'Decrypting team status…'}</div>`;
+  const s = stOf(a), p = typeof a.progress === 'number' ? Math.max(0, Math.min(100, a.progress)) : null, u = safeUrl(a.link), need = a.status === 'needs_you';
+  const ringSt = need ? 'warn' : a.status === 'done' ? 'ok' : 'acc';
+  const center = p != null ? `<span class="rpct">${p}%</span>` : need ? ic('alert', 24, COL.warn, 2) : a.status === 'done' ? ic('check', 24, COL.ok, 2.4) : ic(a.status === 'idle' ? 'clock' : 'bolt', 24, a.status === 'idle' ? COL.dim : COL.acc, 2);
+  const inbox = (conn.inbox || []).slice(0, 5);
+  return `<div class="ph"><h3>Agent<small>${esc(KIND[a.kind] || a.kind || '')}</small></h3>${hint}</div>
+   <div class="dhead">${miniRing(p ?? (a.status === 'idle' ? 0 : 100), ringSt, center)}
+    <div class="grow"><div class="dt ell">${esc(a.name)}</div><div class="mutedt dtask">${esc(a.task || 'Standing by')}</div>
+     <div class="dfacts"><span class="badge ${s.badge}">${s.label}</span>${u ? `<a class="btn sm ${need ? 'pri' : ''}" href="${esc(u)}" target="_blank" rel="noopener">${need ? 'Review now' : 'Open'} ${ic('ext', 14, need ? '#1a1206' : 'var(--acc)')}</a>` : ''}</div></div></div>
+   <div class="label dlbl">Latest replies${inbox.length ? ` <button class="lnkbtn" data-replies>All ${(conn.inbox || []).length}</button>` : ''}</div>
+   <div class="rlist scroll s2list">${inbox.length ? replyRows(inbox) : `<div class="empty">${conn.status ? 'No replies yet.' : alive(1) ? 'Waiting for screen 1…' : 'Open NOVA on screen 1 to see replies.'}</div>`}</div>
+   <div class="mutedt sm dnote">${ic('bolt', 14)} Send messages from the Ask bar on screen 1.</div>`;
+}
+function xLogs() {
+  const ev = [], g = state.gh;
+  (g.runs || (g.run ? [g.run] : [])).slice(0, 3).forEach((r) => { const st = r.status !== 'completed' ? 'warn' : r.conclusion === 'success' ? 'ok' : 'bad'; ev.push([r.updated_at, st, 'deploy', `${r.name || 'workflow'} #${r.run_number} · ${r.status !== 'completed' ? 'running' : r.conclusion}`]); });
+  (g.commits || (g.commit ? [g.commit] : [])).slice(0, 3).forEach((c) => ev.push([c.date, 'acc', 'commit', `${c.sha} ${c.message}`]));
+  (g.prs || []).slice(0, 4).forEach((p) => ev.push([p.updated_at, 'acc', 'pr', `#${p.number} ${p.title}${p.draft ? ' (draft)' : ''}`]));
+  updates().forEach((u) => ev.push([u.time, 'acc', 'update', u.title]));
+  (conn.inbox || []).slice(0, 3).forEach((x) => ev.push([x.time, 'ok', 'reply', x.text]));
+  ((conn.cursor && conn.cursor.items) || []).slice(0, 3).forEach((x) => ev.push([x.updatedAt, 'acc', 'cursor', `${x.name || 'Agent'} · ${String(x.status || '').toLowerCase()}`]));
+  if (state.calo.checkedAt) ev.push([state.calo.checkedAt, state.calo.online ? 'ok' : 'bad', 'uptime', `Calo ${state.calo.online ? 'online' : 'offline'}${state.calo.ms ? ' · ' + state.calo.ms + ' ms' : ''}`]);
+  const tms = (v) => { const t = typeof v === 'number' ? v : Date.parse(v && v.length === 10 ? v + 'T12:00:00-03:00' : v); return isNaN(t) ? 0 : t; };
+  ev.sort((x, y) => tms(y[0]) - tms(x[0]));
+  return `<div class="ph"><h3>Activity log<small>GitHub · Calo · team</small></h3><span class="meta">Halifax time</span></div>
+   <div class="scroll s2list">${ev.length ? ev.slice(0, 16).map(([t, k, kind, m]) => `<div class="lg"><span class="lt">${tms(t) ? esc(fYmd.format(new Date(tms(t))) === fYmd.format(new Date()) ? fTime.format(new Date(tms(t))) : fDay.format(new Date(tms(t)))) : ''}</span><span class="lk ${k}">${esc(kind)}</span><span class="lm" title="${esc(m)}">${esc(m)}</span></div>`).join('') : '<div class="empty">Loading…</div>'}</div>`;
+}
+// Cursor + Copilot lists come from nova-api through screen 1 (read-only GET routes)
+const CODE_ST = (v) => { const x = String(v || '').toLowerCase();
+  if (/run|progress|creat|queue|pending|working|open/.test(x) && !/draft/.test(x)) return ['pulse', 'acc', x.includes('queue') || x.includes('pending') ? 'Queued' : 'Working'];
+  if (/finish|complet|done|success|merged|closed/.test(x)) return ['ok', 'ok', 'Done'];
+  if (/error|fail|cancel|expired/.test(x)) return ['bad', 'bad', 'Failed'];
+  if (/draft/.test(x)) return ['', 'acc', 'Draft PR'];
+  return ['idle', 'dim', x ? x.replace(/_/g, ' ') : 'Idle']; };
+function codeRows(kind) {
+  const integ = kind === 'cursor' ? isOn('cursor') : isOn('copilot') || isOn('github'), d = conn[kind];
+  if (!conn.status) return `<div class="empty">${SEC && !alive(1) ? 'Open NOVA on screen 1 to load these.' : conn.err ? esc(conn.err) : 'Connecting…'}</div>`;
+  if (!integ) return '<div class="empty">Not connected yet.</div>';
+  if (!d) return '<div class="empty">Loading…</div>';
+  const items = d.items || [];
+  if (!items.length) return `<div class="empty">${d.err ? esc(d.err) : kind === 'cursor' ? 'No Cursor agents yet.' : 'No Copilot tasks yet.'}</div>`;
+  return items.slice(0, 12).map((x) => {
+    const [dot, badge, label] = CODE_ST(kind === 'cursor' ? x.status : x.state), u = safeUrl(x.url), when = x.updatedAt || x.updated_at;
+    const sub = [kind === 'cursor' ? '' : String(x.repo || '').split('/')[1] || '', when ? ago(when) : ''].filter(Boolean).map(esc).join(' · ');
+    const inner = `<span class="dot ${dot}"></span><div class="grow"><b class="ell" style="display:block">${esc(x.name || x.title || 'Untitled')}</b>${sub ? `<div class="mutedt sm">${sub}</div>` : ''}</div><span class="badge ${badge}">${esc(label)}</span>`;
+    return u ? `<a class="row hov" href="${esc(u)}" target="_blank" rel="noopener">${inner}</a>` : `<div class="row">${inner}</div>`;
+  }).join('') + (d.err ? `<div class="mutedt sm">${esc(d.err)}</div>` : '');
+}
+function xCode() {
+  const cu = conn.cursor, at = Math.max((cu && cu.at) || 0, (conn.copilot && conn.copilot.at) || 0);
+  return `<div class="ph"><h3>Coding agents<small>read-only</small></h3><span class="meta">${at ? 'Synced <span data-ago="' + at + '">' + esc(ago(at)) + '</span>' : ''}</span></div>
+   <div class="cgrp"><div class="label glbl">Cursor${cu && cu.cap ? ` <span class="dimt">· ${esc(cu.used ?? 0)} of ${esc(cu.cap)} started today</span>` : ''}<a class="lnk" href="https://cursor.com/agents" target="_blank" rel="noopener">Open ${ic('ext', 12, 'currentColor')}</a></div><div class="scroll s2list">${codeRows('cursor')}</div></div>
+   <div class="cgrp"><div class="label glbl">GitHub Copilot<a class="lnk" href="https://github.com/copilot/agents" target="_blank" rel="noopener">Open ${ic('ext', 12, 'currentColor')}</a></div><div class="scroll s2list">${codeRows('copilot')}</div></div>`;
+}
+function xGitHub() {
+  const g = state.gh, prs = g.prs || [], runs = g.runs || (g.run ? [g.run] : []), cms = g.commits || (g.commit ? [g.commit] : []);
+  const runRow = (r) => { const st = r.status !== 'completed' ? 'warn' : r.conclusion === 'success' ? 'ok' : 'bad';
+    return `<a class="row hov" href="${esc(safeUrl(r.html_url))}" target="_blank" rel="noopener"><span class="dot ${st}"></span><div class="grow"><b class="ell" style="display:block">${esc(r.name || 'workflow')} #${esc(r.run_number)}</b><div class="mutedt sm">${r.status !== 'completed' ? 'Running' : esc(r.conclusion || '')} · <span data-ago="${esc(r.updated_at)}">${esc(ago(r.updated_at))}</span></div></div></a>`; };
+  const cmRow = (c) => `<a class="row hov" href="${esc(safeUrl(c.html_url))}" target="_blank" rel="noopener">${ic('commit', 16)}<div class="grow"><b class="ell" style="display:block">${esc(c.message)}</b><div class="mutedt sm"><span class="mono">${esc(c.sha)}</span> · ${esc(c.author || '')} · <span data-ago="${esc(c.date)}">${esc(ago(c.date))}</span></div></div></a>`;
+  return `${ghTop()}
+   <div class="ghlists scroll s2list">
+    <div class="label gl">Open pull requests · ${g.prs ? prs.length : '…'}</div>${g.prs ? (prs.length ? prs.map(prRow).join('') : '<div class="empty">No open pull requests</div>') : '<div class="empty">Loading…</div>'}
+    <div class="label gl">Deploys</div>${runs.length ? runs.slice(0, 3).map(runRow).join('') : '<div class="empty">No deploys yet</div>'}
+    <div class="label gl">Commits</div>${cms.length ? cms.slice(0, 5).map(cmRow).join('') : '<div class="empty">Loading…</div>'}
+   </div>
+   ${g.error ? `<div class="mutedt sm">${ic('alert', 14, COL.warn)} ${esc(g.error)}</div>` : ''}
+   <div class="foot"><span>${g.fetchedAt ? 'Synced <span data-ago="' + g.fetchedAt + '">' + esc(ago(g.fetchedAt)) + '</span>' : ''}</span><span>Every 5 min</span></div>`;
+}
+function xCalo() {
+  const c = state.calo, s = caloStats(), up = updates().slice(0, 4);
+  return `<div class="ph"><h3>${esc(c.name || 'Calo')} App</h3>${s.badge}</div>
+   ${kvs([['Version', esc(s.version)], ['Response', c.ms ? esc(c.ms) + ' ms' : '—'], ['Checked', c.checkedAt ? `<span data-ago="${c.checkedAt}">${esc(ago(c.checkedAt))}</span>` : '…']])}
+   <div class="mutedt sm clink">Live at <a class="lnk" href="${CALO}" target="_blank" rel="noopener">tyler467890.github.io/student-day-planner</a></div>
+   <div class="cupd"><div class="label">Recent updates</div><div class="scroll s2list">${up.length ? up.map((u) => `<div class="row"><span class="dot"></span><div class="grow"><b class="ell" style="display:block;font-weight:600">${esc(u.title)}</b><div class="mutedt sm">${esc(dayLabel(u.time))}</div></div></div>`).join('') : '<div class="empty">No updates yet</div>'}</div></div>
+   <div class="btns"><a class="btn sm" href="${CALO}" target="_blank" rel="noopener">Open Calo ${ic('ext', 14)}</a><button class="btn sm" data-recheck>Check again</button></div>`;
+}
+function xBiz() {
+  return `<div class="ph"><h3>Business<small>after launch</small></h3><span class="soon">Coming after launch</span></div>
+   <div class="bk">${[['Sales', 'Etsy orders and revenue', 'chart'], ['Profit', 'After fees and ads', 'chart'], ['Ads', 'Spend, clicks, sales', 'bolt'], ['Email', 'Support inbox', 'mail']].map(([k, sub, i]) => `<div class="bcell future">${ic(i, 20)}<div class="grow"><div class="label">${k}</div><div class="big dimt">—</div><div class="mutedt sm">${sub}</div></div></div>`).join('')}</div>
+   <p class="mutedt sm bnote">Nothing is connected yet, so there are no numbers. These fill in once Calo is on Etsy.</p>`;
 }
 
 // ---------- views ----------
@@ -422,16 +579,17 @@ function viewBusiness() {
 // ---------- shell ----------
 const VIEWS = [['overview', 'Overview', 'home', 'Home'], ['agents', 'Agents', 'users', 'Team'], ['calo', 'Calo', 'rabbit', 'Calo'], ['business', 'Business', 'chart', 'Business']];
 function renderTop() {
-  const c = clockParts(), sys = systems();
-  patch($('#topbar'), `<a class="brand" href="#overview">${brandMark()}<div class="name">NOVA</div><div class="sub">Command Center</div></a>
-   <nav class="nav">${VIEWS.map(([k, l]) => `<a href="#${k}" class="${state.view === k ? 'on' : ''}">${l}</a>`).join('')}</nav>
-   <div class="tright"><span class="pill ${sys.issues.length ? 'warn' : ''}" title="${esc(sys.issues.join(', ') || 'Calo online, deploy OK, team feed decrypted')}"><span class="dot ${sys.issues.length ? 'warn' : 'ok'}"></span>${sys.issues.length ? sys.issues.length + (sys.issues.length === 1 ? ' issue' : ' issues') : 'All systems normal'}</span>
+  if (SEC) return;
+  const c = clockParts(), cmd = ROLE === 'command';
+  patch($('#topbar'), `<a class="brand" href="#overview">${brandMark()}<div class="name">NOVA</div><div class="sub">${cmd ? 'Screen 1 · Command' : 'Command Center'}</div></a>
+   ${cmd ? `<nav class="chips" aria-label="Screens">${screenChips()}</nav>` : `<nav class="nav">${VIEWS.map(([k, l]) => `<a href="#${k}" class="${state.view === k ? 'on' : ''}">${l}</a>`).join('')}</nav>`}
+   <div class="tright">${sysPill()}
     <span class="clk" data-topclock>${esc(c.date.toUpperCase())} · ${esc(c.hm)} ${esc(c.ap)} ${esc(c.zone)}</span>${fpsTag()}
     ${fsButton()}
-    <button class="lockbtn s2btn" data-screen2 title="Open Screen 2 (operations) in its own window for your other monitor">${ic('ext', 15, 'currentColor')}<span class="lt">Screen 2</span></button>
-    <button class="lockbtn setbtn" data-settings title="Settings: performance, glass effect, two-screen setup">${ic('gear', 15, 'currentColor')}<span class="lt">Settings</span></button>
+    <button class="lockbtn setupbtn" data-setup title="Set up screens: open NOVA's other screens on your other monitors">${ic('monitor', 15, 'currentColor')}<span class="lt">Set up screens</span></button>
+    <button class="lockbtn setbtn" data-settings title="Settings: performance, screens layout, glass effect">${ic('gear', 15, 'currentColor')}<span class="lt">Settings</span></button>
     <button class="lockbtn connbtn" data-conn title="Connections: which tools are linked to NOVA">${ic('bolt', 15, 'currentColor')}<span class="lt">Connections</span></button>
-    <button class="lockbtn" data-lock title="Lock NOVA and forget the passphrase on this device">${ic('lock', 15, 'currentColor')}<span class="lt">Lock</span></button><div class="avatar" title="Tyler Fennell">TF</div></div>`);
+    <button class="lockbtn" data-lock title="Lock NOVA on every screen and forget the passphrase on this device">${ic('lock', 15, 'currentColor')}<span class="lt">Lock</span></button><div class="avatar" title="Tyler Fennell">TF</div></div>`);
   patch($('#tabs'), VIEWS.map(([k, , i, l]) => `<a class="tab ${state.view === k ? 'on' : ''}" href="#${k}">${ic(i, 24, state.view === k ? 'var(--acc)' : 'var(--muted)')}<span>${l}</span></a>`).join(''));
 }
 // ---------- in-place DOM updates ----------
@@ -486,12 +644,16 @@ function patch(el, html) {
   el.__html = html; tpl.innerHTML = html; morphKids(el, tpl.content);
 }
 function render() {
-  renderTop();
+  applyRole();
   const v = state.view;
-  patch($('#view'), v === 'agents' ? viewAgents() : v === 'calo' ? viewCalo() : v === 'business' ? viewBusiness() : viewOverview());
-  document.title = SCREEN2 ? 'NOVA · Screen 2' : 'NOVA · ' + (VIEWS.find((x) => x[0] === v) || VIEWS[0])[1];
-  renderS2(); after3D();
-  emit('render', { view: v });
+  if (!SEC) {
+    renderTop();
+    patch($('#view'), ROLE === 'command' ? viewCommand() : v === 'agents' ? viewAgents() : v === 'calo' ? viewCalo() : v === 'business' ? viewBusiness() : viewOverview());
+    document.title = 'NOVA · ' + (ROLE === 'command' ? 'Command' : (VIEWS.find((x) => x[0] === v) || VIEWS[0])[1]);
+  } else document.title = `NOVA · Screen ${SCR} · ${roleName()}`;
+  renderSec(); after3D();
+  emit('render', { view: v, role: ROLE });
+  relay();
 }
 function tick() {
   const c = clockParts();
@@ -510,9 +672,22 @@ function route() {
   if (h[0] === 'agents' && h[1] != null && !isNaN(+h[1])) state.selAgent = +h[1];
   render(); window.scrollTo(0, 0);
 }
+// one selected agent across every screen
+function selectAgent(i) { if (state.selAgent !== i) { state.selAgent = i; chan.postMessage({ t: 'sel', i }); } render(); }
 function openAgent(i) {
-  if (SCREEN2) return;
+  if (SEC) { selectAgent(i); return; }
+  if (ROLE === 'command') {
+    selectAgent(i);
+    const a = agents()[i];
+    if (alive(2)) toast(`<div><b>${esc(a ? a.name : 'Agent')}</b> <span class="mutedt">is open on screen 2.</span></div>`, 4000, 'sel'); else openAgentModal(i);
+    return;
+  }
   if (matchMedia('(max-width:760px)').matches) openSheet(i); else { state.selAgent = i; location.hash = '#agents/' + i; }
+}
+function openAgentModal(i) {
+  const a = agents()[i]; if (!a) return;
+  document.getElementById('modal') || document.body.insertAdjacentHTML('beforeend', '<div id="modal"></div>');
+  $('#modal').innerHTML = `<div class="nmodal" data-mclose><div class="mbox amodal" role="dialog" aria-modal="true" aria-label="${esc(a.name)}">${agentDetail(a)}<div class="btns"><button class="btn" data-mclose>Close</button></div></div></div>`;
 }
 function openSheet(i) {
   const a = agents()[i]; if (!a) return;
@@ -520,16 +695,15 @@ function openSheet(i) {
 }
 
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-agent],[data-select],[data-filter],[data-lock],[data-ask],[data-recheck],[data-close],[data-screen2]');
+  const t = e.target.closest('[data-agent],[data-select],[data-filter],[data-lock],[data-ask],[data-recheck],[data-close]');
   screenClicks(e);
   if (!t) return;
   if (t.hasAttribute('data-close')) { if (e.target === t || e.target.closest('button[data-close]')) $('#sheet').innerHTML = ''; return; }
-  if (t.hasAttribute('data-screen2')) { openScreen2(); return; }
-  if (t.hasAttribute('data-agent')) openAgent(+t.getAttribute('data-agent')); else if (t.hasAttribute('data-select')) { state.selAgent = +t.getAttribute('data-select'); render(); }
+  if (t.hasAttribute('data-agent')) openAgent(+t.getAttribute('data-agent')); else if (t.hasAttribute('data-select')) selectAgent(+t.getAttribute('data-select'));
   else if (t.hasAttribute('data-filter')) { state.teamFilter = t.getAttribute('data-filter'); render(); }
   else if (t.hasAttribute('data-lock')) lock();
   else if (t.hasAttribute('data-ask')) { t.classList.add('show'); clearTimeout(t._tm); t._tm = setTimeout(() => t.classList.remove('show'), 2200); }
-  else if (t.hasAttribute('data-recheck')) checkCalo(true);
+  else if (t.hasAttribute('data-recheck')) { if (SEC && alive(1)) chan.postMessage({ t: 'recheck' }); else checkCalo(true); }
 });
 window.addEventListener('hashchange', route);
 
@@ -590,12 +764,12 @@ async function refreshGitHub(force) {
   if (!force && now - (g.fetchedAt || 0) < REFRESH_MS - 5000) return;
   if (g.rateResetAt && now < g.rateResetAt) return;
   try {
-    const [prs, runs, commits] = await Promise.all([ghGet('/pulls?state=open&per_page=20'), ghGet('/actions/runs?per_page=5'), ghGet('/commits?per_page=1')]);
+    const [prs, runs, commits] = await Promise.all([ghGet('/pulls?state=open&per_page=20'), ghGet('/actions/runs?per_page=5'), ghGet('/commits?per_page=6')]);
     g.prs = prs.map((p) => ({ number: p.number, title: p.title, draft: !!p.draft, html_url: p.html_url, updated_at: p.updated_at }));
-    const run = (runs.workflow_runs || [])[0];
-    g.run = run ? { name: run.name, status: run.status, conclusion: run.conclusion, updated_at: run.updated_at, html_url: run.html_url, run_number: run.run_number } : null;
-    const cm = commits[0];
-    g.commit = cm ? { sha: cm.sha.slice(0, 7), message: (cm.commit.message || '').split('\n')[0], author: (cm.author && cm.author.login) || cm.commit.author.name, date: cm.commit.author.date, html_url: cm.html_url } : null;
+    g.runs = (runs.workflow_runs || []).slice(0, 5).map((run) => ({ name: run.name, status: run.status, conclusion: run.conclusion, updated_at: run.updated_at, html_url: run.html_url, run_number: run.run_number }));
+    g.run = g.runs[0] || null;
+    g.commits = (Array.isArray(commits) ? commits : []).slice(0, 6).map((cm) => ({ sha: cm.sha.slice(0, 7), message: (cm.commit.message || '').split('\n')[0], author: (cm.author && cm.author.login) || cm.commit.author.name, date: cm.commit.author.date, html_url: cm.html_url }));
+    g.commit = g.commits[0] || null;
     g.fetchedAt = now; g.error = ''; g.rateResetAt = 0;
   } catch (e) {
     if (e.reset) { g.rateResetAt = e.reset; g.error = 'GitHub rate limit reached, showing saved data. Retrying at ' + fTime.format(new Date(e.reset)) + '.'; }
@@ -624,7 +798,9 @@ async function checkCalo(force) {
 
 // ---------- 3D layer (3d/nova-3d.min.js) ----------
 const N3 = window.NOVA3D || null;
-const SCREEN2 = document.documentElement.getAttribute('data-n3d-screen') === '2';
+const SCR = +document.documentElement.getAttribute('data-n3d-screen') || 1; // 1 Command · 2 Team · 3 Build & Business
+const SEC = SCR !== 1;                    // a secondary window (screen 2 or 3): no 3D core, no nova-api sign-in
+let ROLE = document.documentElement.getAttribute('data-role') || 'all'; // all | command | team | build | merged
 const BUNNY = '3d/assets/calo-bunny.glb';
 const n3d = { shown: false, webgl: false, booted: false, holo: null, agentsKey: '', runKey: '' };
 function clock3d() {
@@ -656,11 +832,13 @@ function after3D() {
   if (!N3) return;
   N3.attachPanels('#view .panel, #s2 .panel', { boot: !n3d.booted });
   n3d.booted = true;
-  placeHolo(); sync3D(); refreshFocus();
+  placeHolo(); if (!SEC) sync3D(); refreshFocus();
 }
 function reset3D() {
   if (!N3) return;
-  N3.back(); n3d.booted = false; n3d.agentsKey = ''; N3.setAgents([]); N3.setActivity(0, 1); N3.setStatus('normal');
+  n3d.booted = false;
+  if (SEC) return; // screens 2 and 3 have no core (and must not reset screen 1's)
+  N3.back(); n3d.agentsKey = ''; N3.setAgents([]); N3.setActivity(0, 1); N3.setStatus('normal');
 }
 // focus detail: real data per area
 const drow = (dot, title, sub, right = '', href = '', attrs = '') => {
@@ -676,7 +854,7 @@ function renderArea(area) {
     const order = { needs_you: 0, working: 1, done: 2, idle: 3 };
     const rows = a.map((x, i) => [x, i]).sort((p, q) => (order[p[0].status] ?? 4) - (order[q[0].status] ?? 4)).map(([x, i]) => {
       const s = stOf(x), right = `<span class="badge ${s.badge}">${s.label}</span>`;
-      return drow(s.dot, `${esc(x.name)} <small class="mutedt">${esc(KIND[x.kind] || x.kind || '')}</small>`, esc(x.task || (x.status === 'idle' ? 'Standing by' : '')), right, '', SCREEN2 ? '' : `data-agent="${i}"`);
+      return drow(s.dot, `${esc(x.name)} <small class="mutedt">${esc(KIND[x.kind] || x.kind || '')}</small>`, esc(x.task || (x.status === 'idle' ? 'Standing by' : '')), right, '', SEC ? `data-select="${i}"` : `data-agent="${i}"`);
     }).join('');
     return kvs([['Working', c.working], ['Need you', c.need, c.need ? 'warnc' : ''], ['Agents', c.total]]) + `<div class="dlist">${rows || '<div class="empty">No agents yet</div>'}</div>` + `<div class="dfoot mutedt sm">${state.status.updatedAt ? 'Updated ' + esc(ago(state.status.updatedAt)) + ' · ' : ''}Encrypted feed</div>`;
   }
@@ -722,49 +900,41 @@ function refreshFocus() {
   if (!N3 || !N3.state.focus) return;
   fillFocus(N3.state.focus, document.querySelector('.n3d-detail-body'));
 }
-function renderS2() {
-  if (!$('#s2')) return;
-  const c = counts(), a = agents(), clk = clockParts();
-  const wide = document.documentElement.getAttribute('data-n3d-layout') === 'wide' && !SCREEN2;
-  patch($('#s2bar'), `<div class="brand">${brandMark()}<div class="name">NOVA</div><div class="sub">Screen 2 · Operations</div></div>
-   <div class="tright"><span class="pill link" data-peer><span class="dot idle"></span><span class="linktxt">${wide ? 'Wide mode · both screens' : 'Looking for screen 1…'}</span></span>
+// screens 2 and 3 (and the right half of one stretched window) share one set of panels; the grid shows the ones for this role
+const GRID = { team: ['agents', 'detail', 'logs', 'code'], build: ['gh', 'calo', 'tasks', 'biz', 'dock'], merged: ['agents', 'detail', 'code', 'gh', 'calo', 'tasks', 'biz', 'dock'] };
+const FILL = { agents: xAgents, detail: xDetail, logs: xLogs, code: xCode, gh: xGitHub, calo: xCalo, tasks: () => tasksInner(), biz: xBiz, dock: dockInner };
+const wideOn = () => !SEC && document.documentElement.getAttribute('data-n3d-layout') === 'wide';
+function renderSec() {
+  if (!$('#s2') || !(SEC || wideOn())) return;
+  const g = SEC ? ROLE : 'merged', grid = $('#grid2'), clk = clockParts();
+  if (grid.dataset.g !== g) grid.dataset.g = g;
+  patch($('#s2bar'), `<div class="brand">${brandMark()}<div class="name">NOVA</div><div class="sub">${SEC ? `Screen ${SCR} · ${esc(roleName())}` : 'Screen 2 · Team · Build'}</div></div>
+   <div class="tright"><span class="pill link" data-peer><span class="dot idle"></span><span class="linktxt">${SEC ? 'Looking for screen 1…' : 'Wide mode · both screens'}</span></span>
    <span class="clk" data-topclock2>${esc(clk.date.toUpperCase())} · ${esc(clk.hm)} ${esc(clk.ap)} ${esc(clk.zone)}</span>
-   ${fpsTag()}${fsButton()}${SCREEN2 && canPlace() ? `<button class="lockbtn placebtn" data-place title="Move this window to your other monitor and make it full screen">${ic('monitor', 15, 'currentColor')}<span class="lt">Place on other monitor</span></button>` : ''}
+   ${fpsTag()}${fsButton()}${SEC && canPlace() ? `<button class="lockbtn placebtn" data-place title="Move this window to its monitor and make it full screen">${ic('monitor', 15, 'currentColor')}<span class="lt">Place on monitor</span></button>` : ''}
    <button class="lockbtn setbtn" data-settings title="Settings">${ic('gear', 15, 'currentColor')}<span class="lt">Settings</span></button>
-   ${SCREEN2 ? `<button class="lockbtn" data-lock title="Lock NOVA and forget the passphrase on this device">${ic('lock', 15, 'currentColor')}<span class="lt">Lock</span></button>` : ''}</div>`);
-  const upd = state.status && state.status.updatedAt ? fTime.format(new Date(state.status.updatedAt)) : '';
-  patch($('#s2-feed'), `<div class="ph"><h3>Agent activity<small>latest status</small></h3><span class="meta"><span class="acc">${c.working} working</span>${c.need ? ` · <span class="warnc">${c.need} need${c.need === 1 ? 's' : ''} you</span>` : ''}</span></div>
-   <div class="scroll s2list">${a.length ? a.map((x) => `<div class="ev2"><span class="tt">${esc(upd)}</span><span class="dot ${stOf(x).dot}"></span><div class="grow"><div class="ea">${esc(x.name)} <small class="mutedt">${esc(KIND[x.kind] || x.kind || '')}</small></div><div class="eb">${esc(stOf(x).label)}${x.task ? ' · ' + esc(x.task) : ''}</div></div></div>`).join('') : `<div class="empty">${state.statusErr ? esc(state.statusErr) : 'Decrypting team status…'}</div>`}</div>`);
-  const ev = [];
-  const g = state.gh;
-  if (g.run) ev.push([g.run.updated_at, runState() === 'ok' ? 'ok' : runState() === 'bad' ? 'bad' : 'warn', 'deploy', `${g.run.name || 'workflow'} #${g.run.run_number} · ${g.run.status !== 'completed' ? 'running' : g.run.conclusion}`]);
-  if (g.commit) ev.push([g.commit.date, 'acc', 'commit', `${g.commit.sha} ${g.commit.message}`]);
-  (g.prs || []).slice(0, 4).forEach((p) => ev.push([p.updated_at, 'acc', 'pr', `#${p.number} ${p.title}${p.draft ? ' (draft)' : ''}`]));
-  updates().forEach((u) => ev.push([u.time, 'acc', 'update', u.title]));
-  (conn.inbox || []).slice(0, 3).forEach((x) => ev.push([x.time, 'ok', 'reply', x.text]));
-  if (state.calo.checkedAt) ev.push([state.calo.checkedAt, state.calo.online ? 'ok' : 'bad', 'uptime', `Calo ${state.calo.online ? 'online' : 'offline'}${state.calo.ms ? ' · ' + state.calo.ms + ' ms' : ''}`]);
-  const tms = (v) => { const t = typeof v === 'number' ? v : Date.parse(v && v.length === 10 ? v + 'T12:00:00-03:00' : v); return isNaN(t) ? 0 : t; };
-  ev.sort((x, y) => tms(y[0]) - tms(x[0]));
-  patch($('#s2-logs'), `<div class="ph"><h3>Activity log<small>GitHub · Calo · team</small></h3><span class="meta">Halifax time</span></div>
-   <div class="scroll s2list">${ev.length ? ev.slice(0, 14).map(([t, k, kind, m]) => `<div class="lg"><span class="lt">${tms(t) ? esc(fYmd.format(new Date(tms(t))) === fYmd.format(new Date()) ? fTime.format(new Date(tms(t))) : fDay.format(new Date(tms(t)))) : ''}</span><span class="lk ${k}">${esc(kind)}</span><span class="lm" title="${esc(m)}">${esc(m)}</span></div>`).join('') : '<div class="empty">Loading…</div>'}</div>`);
-  patch($('#s2-biz'), `<div class="ph"><h3>Business<small>after launch</small></h3><span class="soon">Coming after launch</span></div>
-   <p class="mutedt" style="font-size:0.875rem">Etsy sales, profit, ads and email appear here after Calo launches. Nothing is connected yet.</p>
-   <div class="bk">${['Sales', 'Profit', 'Ads', 'Email'].map((k) => `<div class="future"><div class="label">${k}</div><div class="big dimt">—</div></div>`).join('')}</div>`);
-  const bl = $('#s2-baylbl'); if (bl) bl.textContent = `Calo${state.calo.version ? ' v' + state.calo.version : ''} · phone + guide preview`;
+   ${SEC ? `<button class="lockbtn" data-lock title="Lock NOVA on every screen">${ic('lock', 15, 'currentColor')}<span class="lt">Lock</span></button>` : ''}</div>`);
+  for (const k of GRID[g]) patch($('#x-' + k), FILL[k]());
+  const f = (N3 && N3.state.focus) || state.focus || null;
+  document.querySelectorAll('#s2 [data-area]').forEach((el) => el.classList.toggle('hl', !!f && el.dataset.area === f));
+  const bl = $('#x-baylbl'); if (bl) bl.textContent = `Calo${state.calo.version ? ' v' + state.calo.version : ''} · phone + guide preview`;
   updatePeer();
 }
 function updatePeer() {
-  const p = $('[data-peer]'); if (!p || !N3) return;
-  const wide = document.documentElement.getAttribute('data-n3d-layout') === 'wide' && !SCREEN2, on = wide || N3.state.peer;
+  const p = $('[data-peer]'); if (!p) return;
+  const on = !SEC || alive(1);
   p.classList.toggle('on', on);
-  p.querySelector('.linktxt').textContent = wide ? 'Wide mode · both screens' : on ? (SCREEN2 ? 'Linked to screen 1' : 'Linked to screen 2') : (SCREEN2 ? 'Open NOVA on screen 1' : 'Screen 2 not open');
+  const t = !SEC ? 'Wide mode · both screens' : on ? 'Linked to screen 1' : 'Open NOVA on screen 1';
+  const tx = p.querySelector('.linktxt'); if (tx.textContent !== t) tx.textContent = t;
 }
 if (N3) {
   document.addEventListener('nova:3d-ready', (e) => {
     n3d.webgl = !!e.detail.webgl;
     document.documentElement.classList.toggle('n3d-on', n3d.webgl);
   });
-  document.addEventListener('nova:focus', (e) => fillFocus(e.detail.area, e.detail.body));
+  document.addEventListener('nova:focus', (e) => { fillFocus(e.detail.area, e.detail.body); if (!SEC) relay(); else renderSec(); });
+  // screens without a core flash their logo when the core pulses (new deploy, a pick on screen 1)
+  document.addEventListener('nova:pulse', () => { if (!SEC) return; const m = $('#s2bar .mark'); if (!m) return; m.classList.remove('pflash'); void m.getBoundingClientRect(); m.classList.add('pflash'); });
   document.addEventListener('nova:agent-select', (e) => openAgent(e.detail.index));
   document.addEventListener('nova:layout', (e) => { wideSplit(); if (n3d.shown) render(); if (e.detail.layout === 'wide') wideTip(); });
   window.addEventListener('hashchange', () => { if (N3.state.focus) N3.back(); });
@@ -772,13 +942,16 @@ if (N3) {
   setInterval(() => { const t = $('[data-topclock2]'); if (t) { const c = clockParts(); t.textContent = `${c.date.toUpperCase()} · ${c.hm} ${c.ap} ${c.zone}`; } }, 1000);
 }
 
-// ---------- screens: Full screen, Screen 2, Place on other monitor, Settings ----------
-const PREFS_KEY = 'nova.prefs', AUTO_KEY = 'nova.perf.auto';
-const prefs = () => Object.assign({ perf: 'auto', glass: false, fps: false, wide: 'auto' }, lsGet(PREFS_KEY) || {});
+// ---------- screens: 1 Command · 2 Team · 3 Build & Business ----------
+// Each screen is its own window that fills its own monitor (?screen=2, ?screen=3). They talk over a BroadcastChannel:
+// heartbeats (who is open), selection, prefs, and a data relay. Only screen 1 signs in to nova-api; it relays what the
+// other screens show, so no session or key ever exists in screens 2 and 3.
+const PREFS_KEY = 'nova.prefs', AUTO_KEY = 'nova.perf.auto', ASSIGN_KEY = 'nova.scr.assign';
+const prefs = () => Object.assign({ perf: 'auto', glass: false, fps: false, wide: 'auto', screens: 'auto' }, lsGet(PREFS_KEY) || {});
 const isFs = () => !!document.fullscreenElement;
 const canPlace = () => 'getScreenDetails' in window;
+const unlocked = () => n3d.shown && $('#lock').hidden;
 let screenSD = null; // ScreenDetails once the browser has allowed window management
-let s2win = null;
 function fsButton() {
   const on = isFs();
   return `<button class="lockbtn fsbtn" data-fullscreen title="${on ? 'Leave full screen (Esc)' : 'Fill this monitor: hides the browser bars (same as F11)'}">${ic(on ? 'exitfull' : 'full', 16, 'currentColor', 2)}<span class="lt">${on ? 'Exit full screen' : 'Full screen'}</span></button>`;
@@ -788,91 +961,223 @@ function fpsTag() {
   const s = N3.state; return `<span class="fpsread" data-fps>${fpsText(s)}</span>`;
 }
 const MODE_NAME = { smooth: 'Smooth', full: 'Full effects', minimal: 'Minimal' };
-function fpsText(s) { return `${s.fps} fps · ${MODE_NAME[s.mode] || s.mode}${s.lowDpr ? ' · 1x' : ''}`; }
+function fpsText(s) { return s.lite ? `${s.fps} fps · holograms · ${MODE_NAME[s.mode] || s.mode}` : `${s.fps} fps · ${MODE_NAME[s.mode] || s.mode}${s.lowDpr ? ' · 1x' : ''}`; }
 async function toggleFs() {
-  try {
-    if (document.fullscreenElement) await document.exitFullscreen();
-    else await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
-  } catch (e) { toast(`<div><b>Full screen didn’t start</b><div class="mutedt sm">Press <kbd class="k">F11</kbd> instead. It does the same thing.</div></div>`, 8000); }
+  if (document.fullscreenElement) { try { await document.exitFullscreen(); } catch (e) {} return; }
+  goFull();
+}
+// full screen; screens 2 and 3 go straight to the monitor they were given by Set up screens
+async function goFull() {
+  let target = null;
+  try { target = await targetMonitor(false); } catch (e) {}
+  try { await document.documentElement.requestFullscreen(target ? { screen: target, navigationUI: 'hide' } : { navigationUI: 'hide' }); }
+  catch (e) { toast(`<div><b>Full screen didn’t start</b><div class="mutedt sm">Press <kbd class="k">F11</kbd> instead. It does the same thing.</div></div>`, 8000); }
 }
 document.addEventListener('fullscreenchange', () => {
   document.documentElement.classList.toggle('is-fs', isFs());
-  if (isFs()) { lsSet('nova.tip.fs.' + (SCREEN2 ? 2 : 1), 1); hideToast('fs'); }
-  if ($('#lock').hidden) render();
+  if (isFs()) { lsSet('nova.tip.fs.' + SCR, 1); hideToast('fs'); $('#fsask') && $('#fsask').remove(); }
+  if (unlocked()) render();
   wideSplit();
 });
-function s2url() { const u = new URL(location.href); u.hash = ''; u.searchParams.set('screen', '2'); return u.href; }
+
+// --- who is open: heartbeats every 2 s (also kept in localStorage so a new window knows before the first beat)
+const chan = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('nova-screens') : { postMessage() {}, set onmessage(f) {} };
+const peers = {};
+const liveKey = (n) => 'nova.scr.' + n;
+function alive(n) {
+  if (n === SCR) return true;
+  const b = peers[n] || lsGet(liveKey(n));
+  return !!b && Date.now() - b.t < (b.h ? 75000 : 6500); // a minimised window beats slowly, so give it longer
+}
+// how many screens NOVA is spread over: the Layout setting, or (Auto) the windows that are open right now
+function screensWanted() {
+  const p = String(prefs().screens);
+  if (p === '1' || p === '2' || p === '3') return +p;
+  return alive(3) ? 3 : alive(2) ? 2 : 1;
+}
+function computeRole() {
+  if (SCR === 3) return 'build';
+  if (SCR === 2) return screensWanted() >= 3 ? 'team' : 'merged';
+  if (innerWidth <= 760) return 'all';
+  return wideOn() || screensWanted() >= 2 ? 'command' : 'all';
+}
+function applyRole() {
+  const r = computeRole(); if (r === ROLE) return false;
+  ROLE = r; document.documentElement.setAttribute('data-role', r);
+  if (N3) { N3.relayout(); if (r !== 'command' && r !== 'all') N3.back(); }
+  if (!SEC && r === 'command' && conn.status && conn.cursor === undefined) refreshCode();
+  return true;
+}
+const winCentre = () => ({ x: window.screenX + window.outerWidth / 2, y: window.screenY + window.outerHeight / 2 });
+let closing = false;
+function beat() {
+  if (closing) return;
+  const b = { t: Date.now(), h: document.hidden };
+  lsSet(liveKey(SCR), b);
+  chan.postMessage({ t: 'beat', s: SCR, h: b.h, c: winCentre() });
+}
+let liveSig = '';
+function checkScreens() {
+  const changed = applyRole(), sig = [1, 2, 3].map((n) => +alive(n)).join('');
+  if (changed || sig !== liveSig) { liveSig = sig; if (unlocked()) render(); }
+}
+setInterval(() => { beat(); checkScreens(); }, 2000);
+document.addEventListener('visibilitychange', beat);
+window.addEventListener('pagehide', () => { closing = true; chan.postMessage({ t: 'bye', s: SCR }); try { localStorage.removeItem(liveKey(SCR)); } catch (e) {} });
+chan.onmessage = (e) => {
+  const m = e.data || {};
+  if (m.t === 'beat' && m.s !== SCR) { const was = !!peers[m.s] && alive(m.s); peers[m.s] = { t: Date.now(), h: !!m.h, c: m.c }; if (!was) { relay(true); checkScreens(); } }
+  else if (m.t === 'bye') { delete peers[m.s]; checkScreens(); }
+  else if (m.t === 'hello') relay(true);
+  else if (m.t === 'snap' && SEC) takeSnap(m.d);
+  else if (m.t === 'sel' && typeof m.i === 'number') { state.selAgent = m.i; if (unlocked()) render(); }
+  else if (m.t === 'recheck' && !SEC && unlocked()) checkCalo(true);
+  else if (m.t === 'fs-ask' && SEC && (!m.s || m.s === SCR) && !isFs()) fsAsk();
+  else if (m.t === 'ident') showScreenLabel();
+  else if (m.t === 'prefs') applyPrefs(false);
+};
+beat();
+
+// --- data relay: screen 1 -> screens 2 and 3 (decrypted status, GitHub, Calo, replies, Cursor and Copilot lists; never a token)
+let snapKey = '', relayAt = 0;
+function snapshot() {
+  const g = state.gh;
+  return { status: state.status, statusErr: state.statusErr, calo: state.calo, focus: (N3 && N3.state.focus) || null, sel: state.selAgent,
+    gh: { prs: g.prs, run: g.run, runs: g.runs, commit: g.commit, commits: g.commits, fetchedAt: g.fetchedAt, error: g.error, rateResetAt: g.rateResetAt },
+    conn: { signed: !!conn.session, err: conn.err, status: conn.status, inbox: conn.inbox, cursor: conn.cursor || null, copilot: conn.copilot || null } };
+}
+function relay(force) {
+  if (SEC || !unlocked()) return;
+  if (!force && !alive(2) && !alive(3)) return;
+  const d = snapshot(), k = JSON.stringify(d);
+  if (!force && k === snapKey) return;
+  snapKey = k; chan.postMessage({ t: 'snap', d });
+}
+function takeSnap(d) {
+  if (!d || !unlocked()) return;
+  relayAt = Date.now();
+  if (d.status) { state.status = d.status; state.statusLoadedAt = Date.now(); }
+  state.statusErr = d.status ? '' : d.statusErr || state.statusErr;
+  Object.assign(state.gh, d.gh || {}); if (d.calo) state.calo = d.calo;
+  const c = d.conn || {};
+  conn.status = c.status || null; conn.inbox = c.inbox || []; conn.err = c.err || ''; conn.cursor = c.cursor; conn.copilot = c.copilot;
+  state.focus = d.focus || null; if (typeof d.sel === 'number') state.selAgent = d.sel;
+  render();
+}
+const relayAlive = () => SEC && alive(1) && relayAt > 0;
+
+// --- Cursor agents and Copilot tasks (screen 1 only, read-only GET routes on nova-api)
+async function refreshCode() {
+  if (SEC || !conn.session || !conn.status) return;
+  if (ROLE !== 'command' && screensWanted() < 2) return; // only shown on the Team screen
+  const at = Date.now(), why = (e) => e.status === 503 ? 'Not connected yet.' : e.status === 429 ? 'Busy, trying again soon.' : e.status === 401 ? 'Not signed in to the secure service.' : 'Couldn’t load right now.';
+  const keep = (k) => (conn[k] && conn[k].items) || [];
+  const str = (v, n = 200) => String(v ?? '').slice(0, n);
+  const jobs = [];
+  if (isOn('cursor')) jobs.push(api('/cursor/agents').then((d) => { conn.cursor = { at, used: d.used_today, cap: d.cap, items: (d.agents || []).slice(0, 20).map((a) => ({ name: str(a.name), status: str(a.status, 40), url: str(a.url, 500), updatedAt: str(a.updatedAt, 40) })) }; }, (e) => { conn.cursor = { at, items: keep('cursor'), err: why(e) }; }));
+  else conn.cursor = null;
+  if (isOn('copilot') || isOn('github')) jobs.push(api('/github/copilot-tasks').then((d) => { conn.copilot = { at, source: d.source, items: (d.tasks || []).slice(0, 20).map((t) => ({ title: str(t.title), state: str(t.state, 40), repo: str(t.repo, 100), url: str(t.url, 500), updated_at: str(t.updated_at, 40) })) }; }, (e) => { conn.copilot = { at, items: keep('copilot'), err: why(e) }; }));
+  else conn.copilot = null;
+  await Promise.all(jobs);
+  if (unlocked()) render();
+}
+const refreshConnAll = () => refreshConn().then(refreshCode);
+
+// --- Set up screens: one click on screen 1 opens screens 2 and 3 on the other monitors
 async function screenDetails(ask) {
   if (!canPlace()) return null;
   try {
     if (!ask) { const st = await navigator.permissions.query({ name: 'window-management' }).catch(() => null); if (!st || st.state !== 'granted') return null; }
     screenSD = await window.getScreenDetails();
-    screenSD.onscreenschange = () => wideSplit();
+    screenSD.onscreenschange = () => { wideSplit(); checkScreens(); };
     return screenSD;
   } catch (e) { return null; }
 }
-const inside = (s, p) => p.x >= s.left && p.x < s.left + s.width && p.y >= s.top && p.y < s.top + s.height;
-const winCentre = () => ({ x: window.screenX + window.outerWidth / 2, y: window.screenY + window.outerHeight / 2 });
-// the monitor that isn't showing `avoid` (screen 1's window); falls back to any screen but this one
-function otherScreen(sd, avoid) {
-  const list = (sd && sd.screens) || []; if (list.length < 2) return null;
-  return (avoid && list.find((s) => !inside(s, avoid))) || list.find((s) => s !== sd.currentScreen) || null;
-}
+const inside = (s, p) => !!p && p.x >= s.left && p.x < s.left + s.width && p.y >= s.top && p.y < s.top + s.height;
 const placeFeat = (s) => `popup,left=${s.availLeft},top=${s.availTop},width=${s.availWidth},height=${s.availHeight}`;
-function openScreen2() {
-  const o = screenSD && otherScreen(screenSD, winCentre());
-  const feat = o ? placeFeat(o) : `popup,width=${Math.round(Math.min(1600, screen.availWidth * 0.8))},height=${Math.round(Math.min(900, screen.availHeight * 0.8))}`;
-  s2win = window.open(s2url(), 'nova-screen-2', feat);
-  if (!s2win) { toast(`<div><b>Your browser blocked the new window</b><div class="mutedt sm">Allow pop-ups for this site (icon at the right of the address bar), then click Screen 2 again.</div></div>`, 10000); return; }
-  if (o) { chan.postMessage({ t: 'fs-ask' }); toast(`<div><b>Screen 2 opened on your other monitor</b><div class="mutedt sm">Click it once to make it full screen.</div></div>`, 8000); return; }
-  toast(`<div><b>Screen 2 is open</b><div class="mutedt sm">${canPlace() ? 'Click <b>Place on other monitor</b>, or drag' : 'Drag'} the new window onto your other monitor, then click <b>Full screen</b> on it.</div></div>
-   ${canPlace() ? '<button class="btn" data-place>Place on other monitor</button>' : ''}`, 20000, 's2');
+const plainFeat = (n) => `popup,left=${Math.round((screen.availLeft || 0) + 60 * n)},top=${Math.round((screen.availTop || 0) + 50 * n)},width=${Math.round(Math.min(1600, screen.availWidth * 0.75))},height=${Math.round(Math.min(900, screen.availHeight * 0.75))}`;
+function scrUrl(n, setup) { const u = new URL(location.href); u.hash = ''; u.searchParams.delete('setup'); u.searchParams.set('screen', String(n)); if (setup) u.searchParams.set('setup', '1'); return u.href; }
+// monitors for screens 2..want, left to right, skipping the one this window (screen 1) is on
+function monitorsFor(sd, want) {
+  const here = winCentre(), others = ((sd && sd.screens) || []).filter((s) => !inside(s, here)).sort((a, b) => a.left - b.left || a.top - b.top);
+  const out = {}; for (let n = 2; n <= want; n++) out[n] = others[n - 2] || null; return out;
 }
-// screen 1: move the Screen 2 window to the other monitor; screen 2: go full screen on the other monitor
+let pendingScr = [], setupMons = {};
+async function setupScreens() {
+  if (SEC) return;
+  hideToast();
+  const sd = canPlace() ? await screenDetails(true) : null, nMon = sd ? sd.screens.length : 0, p = String(prefs().screens);
+  const want = p === '1' || p === '2' || p === '3' ? +p : nMon ? Math.min(3, nMon) : 2;
+  if (want < 2) {
+    if (nMon === 1) toast(`<div><b>Only one monitor found</b><div class="mutedt sm">Connect your other screens (on Windows press <kbd class="k">Win</kbd>+<kbd class="k">P</kbd> and pick <b>Extend</b>), then try again.</div></div>`, 12000, 'setup');
+    else toast(`<div><b>Layout is set to 1 screen</b><div class="mutedt sm">Change it in Settings to use more screens.</div></div><button class="btn" data-settings>Settings</button>`, 10000, 'setup');
+    return;
+  }
+  setupMons = sd ? monitorsFor(sd, want) : {};
+  const assign = {}; Object.keys(setupMons).forEach((n) => { const m = setupMons[n]; if (m) assign[n] = { x: m.left + m.width / 2, y: m.top + m.height / 2 }; });
+  lsSet(ASSIGN_KEY, assign);
+  pendingScr = []; for (let n = 2; n <= want; n++) pendingScr.push(n);
+  showScreenLabel(); chan.postMessage({ t: 'ident' });
+  openPending();
+}
+function openPending() {
+  const left = [];
+  for (const n of pendingScr) {
+    const m = setupMons[n] || null; let w = null;
+    try { w = window.open(scrUrl(n, true), 'nova-screen-' + n, m ? placeFeat(m) : plainFeat(n)); } catch (e) {}
+    if (!w) { left.push(n); continue; }
+    if (m) { try { w.moveTo(m.availLeft, m.availTop); w.resizeTo(m.availWidth, m.availHeight); } catch (e) {} }
+  }
+  pendingScr = left;
+  if (left.length) { toast(`<div><b>One more click for screen ${left[0]}</b><div class="mutedt sm">Your browser opens one window per click. To open every screen at once next time, allow pop-ups for NOVA (icon at the right of the address bar).</div></div><button class="btn" data-openmore>Open screen ${left[0]}</button>`, 30000, 'setup'); return; }
+  const placed = Object.values(setupMons).some(Boolean);
+  toast(`<div><b>Screens are open</b><div class="mutedt sm">${placed ? 'Each one is on its own monitor. Click <b>Full screen</b> on each.' : 'Drag each window to its monitor (the big number shows which is which), then click <b>Full screen</b> on it.'}</div></div>`, 14000, 'setup');
+}
+function openOne(n) { if (SEC) return; pendingScr = [n]; openPending(); }
+// the monitor a secondary screen belongs on: the one Set up screens gave it, else one not showing another NOVA screen
+async function targetMonitor(ask) {
+  if (!SEC || !canPlace()) return null;
+  const sd = screenSD || await screenDetails(ask); if (!sd || sd.screens.length < 2) return null;
+  const a = (lsGet(ASSIGN_KEY) || {})[SCR]; if (a) { const s = sd.screens.find((x) => inside(x, a)); if (s) return s; }
+  const avoid = [1, 2, 3].filter((n) => n !== SCR && peers[n] && alive(n)).map((n) => peers[n].c);
+  return sd.screens.find((x) => !avoid.some((p) => inside(x, p))) || null;
+}
 async function placeOnOther() {
   const sd = await screenDetails(true);
   if (!sd) { toast(`<div><b>Couldn’t reach your monitors</b><div class="mutedt sm">Allow “Window management” when Chrome or Edge asks, or drag the window over and click Full screen.</div></div>`, 10000); return; }
   if (sd.screens.length < 2) { toast(`<div><b>Only one monitor found</b><div class="mutedt sm">On Windows press <kbd class="k">Win</kbd>+<kbd class="k">P</kbd> and pick <b>Extend</b>, then try again.</div></div>`, 12000); return; }
-  if (SCREEN2) {
-    const o = otherScreen(sd, peerCentre) || sd.currentScreen;
-    try { await document.documentElement.requestFullscreen({ screen: o, navigationUI: 'hide' }); }
-    catch (e) { toast(`<div><b>One more click</b><div class="mutedt sm">Chrome needs a fresh click after the permission prompt.</div></div><button class="btn" data-place>Place on other monitor</button>`, 15000, 'place'); }
-    return;
-  }
-  const o = otherScreen(sd, winCentre());
-  if (!s2win || s2win.closed) { s2win = window.open(s2url(), 'nova-screen-2', placeFeat(o)); if (!s2win) { toast(`<div><b>Almost there</b><div class="mutedt sm">Click to open Screen 2 on your other monitor.</div></div><button class="btn" data-screen2>Open Screen 2</button>`, 15000, 's2'); return; } }
-  else { try { s2win.moveTo(o.availLeft, o.availTop); s2win.resizeTo(o.availWidth, o.availHeight); } catch (e) {} }
-  chan.postMessage({ t: 'fs-ask' });
-  toast(`<div><b>Screen 2 is on your other monitor</b><div class="mutedt sm">Click it once to make it full screen.</div></div>`, 8000, 's2');
+  const o = (await targetMonitor(false)) || sd.currentScreen;
+  try { await document.documentElement.requestFullscreen({ screen: o, navigationUI: 'hide' }); }
+  catch (e) { toast(`<div><b>One more click</b><div class="mutedt sm">Chrome needs a fresh click after the permission prompt.</div></div><button class="btn" data-place>Place on monitor</button>`, 15000, 'place'); }
 }
-// screens talk over a BroadcastChannel: screen 1 says where it is, screen 2 offers a one-click full screen
-const chan = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('nova-screens') : { postMessage() {}, set onmessage(f) {} };
-let peerCentre = null;
-chan.onmessage = (e) => {
-  const m = e.data || {};
-  if (m.t === 'where' && !SCREEN2) chan.postMessage({ t: 'here', c: winCentre() });
-  if (m.t === 'here' && SCREEN2) peerCentre = m.c;
-  if (m.t === 'fs-ask' && SCREEN2 && !isFs()) fsAsk();
-  if (m.t === 'prefs') applyPrefs(false);
-};
-if (SCREEN2) chan.postMessage({ t: 'where' });
+// big, subtle "Screen 2 · Team" label for a few seconds so it's obvious which window goes where
+function showScreenLabel() {
+  document.querySelectorAll('.scrlabel').forEach((x) => x.remove());
+  const el = document.createElement('div'); el.className = 'scrlabel'; el.setAttribute('aria-hidden', 'true');
+  el.innerHTML = `<b>${SCR}</b><span>Screen ${SCR} · ${esc(SEC ? roleName() : 'Command')}</span>`;
+  document.body.appendChild(el); setTimeout(() => el.remove(), 4600);
+}
 function fsAsk() {
-  if ($('#fsask')) return;
-  document.body.insertAdjacentHTML('beforeend', `<div class="nmodal" id="fsask"><div class="panel mbox" style="text-align:center;width:min(30rem,100%)"><h3 class="ph" style="justify-content:center"><span style="font-family:var(--font-hd);letter-spacing:.14em;text-transform:uppercase;color:var(--acc2)">Screen 2</span></h3>
-   <p class="mutedt" style="margin-bottom:1rem">Click below to fill this monitor.</p><button class="btn" data-fsgo style="font-size:1.2rem;padding:.9rem 1.6rem">${ic('full', 18, 'currentColor', 2)} Full screen</button>
+  if ($('#fsask') || isFs()) return;
+  document.body.insertAdjacentHTML('beforeend', `<div class="nmodal" id="fsask"><div class="panel mbox" style="text-align:center;width:min(30rem,100%)"><h3 class="ph" style="justify-content:center"><span style="font-family:var(--font-hd);letter-spacing:.14em;text-transform:uppercase;color:var(--acc2)">Screen ${SCR} · ${esc(roleName())}</span></h3>
+   <p class="mutedt" style="margin-bottom:1rem">Click below to fill ${canPlace() && (lsGet(ASSIGN_KEY) || {})[SCR] ? 'its monitor' : 'this monitor'}.</p><button class="btn" data-fsgo style="font-size:1.2rem;padding:.9rem 1.6rem">${ic('full', 18, 'currentColor', 2)} Full screen</button>
    <div style="margin-top:.8rem"><button class="lnkbtn" data-fsno>Not now</button></div></div></div>`);
 }
 function screenClicks(e) {
-  const t = e.target.closest('[data-fullscreen],[data-place],[data-settings],[data-fsgo],[data-fsno],[data-tipx],[data-pref],[data-perfretry],[data-twowin]');
+  const t = e.target.closest('[data-fullscreen],[data-place],[data-settings],[data-fsgo],[data-fsno],[data-tipx],[data-pref],[data-perfretry],[data-twowin],[data-setup],[data-openmore],[data-openscr],[data-ident]');
   if (!t) return;
   if (t.hasAttribute('data-fullscreen')) toggleFs();
   else if (t.hasAttribute('data-place')) { hideToast(); placeOnOther(); }
   else if (t.hasAttribute('data-settings')) openSettings();
-  else if (t.hasAttribute('data-fsgo')) { $('#fsask') && $('#fsask').remove(); toggleFs(); }
+  else if (t.hasAttribute('data-fsgo')) { $('#fsask') && $('#fsask').remove(); goFull(); }
   else if (t.hasAttribute('data-fsno')) { $('#fsask') && $('#fsask').remove(); }
   else if (t.hasAttribute('data-tipx')) hideToast();
   else if (t.hasAttribute('data-perfretry')) { localStorage.removeItem(AUTO_KEY); if (N3) N3.setMode('smooth', { auto: true, lowDpr: false }); openSettings(); }
-  else if (t.hasAttribute('data-twowin')) { setPref({ wide: 'off' }); hideToast(); openScreen2(); }
+  else if (t.hasAttribute('data-twowin')) { setPref({ wide: 'off' }); hideToast(); setupScreens(); }
+  else if (t.hasAttribute('data-setup')) { if ($('#modal')) $('#modal').innerHTML = ''; setupScreens(); }
+  else if (t.hasAttribute('data-openmore')) { hideToast(); openPending(); }
+  else if (t.hasAttribute('data-openscr')) openOne(+t.getAttribute('data-openscr'));
+  else if (t.hasAttribute('data-ident')) { showScreenLabel(); chan.postMessage({ t: 'ident' }); }
 }
 document.addEventListener('change', (e) => { const t = e.target.closest('[data-pref]'); if (!t) return; const k = t.getAttribute('data-pref'); setPref({ [k]: t.type === 'checkbox' ? t.checked : t.value }); });
 function setPref(p) {
@@ -889,32 +1194,42 @@ function applyPrefs(local) {
     else N3.setMode(p.perf, { auto: false });
     N3.setWide(p.wide);
   }
-  if ($('#lock').hidden) render();
+  if (unlocked()) render(); else applyRole();
 }
-window.addEventListener('storage', (e) => { if (e.key === PREFS_KEY) applyPrefs(false); });
+window.addEventListener('storage', (e) => {
+  if (e.key === PREFS_KEY) applyPrefs(false);
+  if (e.key === LS.pass) { if (!e.newValue && unlocked()) lock(); else if (e.newValue && !unlocked()) autoUnlock(); } // lock / unlock every screen together
+});
 function openSettings() {
-  const p = prefs(), s = N3 ? N3.state : null, auto = lsGet(AUTO_KEY);
-  const opt = (name, val, cur, title, desc) => `<label class="opt ${cur === val ? 'on' : ''}"><input type="radio" name="${name}" value="${val}" data-pref="${name}" ${cur === val ? 'checked' : ''}><div><b>${title}</b><div class="mutedt sm">${desc}</div></div></label>`;
+  const p = prefs(), s = N3 ? N3.state : null, auto = lsGet(AUTO_KEY), nMon = screenSD ? screenSD.screens.length : 0;
+  const opt = (name, val, cur, title, desc) => `<label class="opt ${String(cur) === val ? 'on' : ''}"><input type="radio" name="${name}" value="${val}" data-pref="${name}" ${String(cur) === val ? 'checked' : ''}><div><b>${title}</b><div class="mutedt sm">${desc}</div></div></label>`;
   const chk = (key, title, desc) => `<label class="opt ${p[key] ? 'on' : ''}"><input type="checkbox" data-pref="${key}" ${p[key] ? 'checked' : ''}><div><b>${title}</b><div class="mutedt sm">${desc}</div></div></label>`;
-  const now = s ? `Right now: ${MODE_NAME[s.mode]}${s.lowDpr ? ' at 1x resolution' : ''} · ${s.fps} fps drawn${s.busyFps ? ` · ${s.busyFps} fps while moving` : ''}` : '3D is off on this device';
+  const now = !s ? '3D is off on this device' : s.lite ? `This screen draws only small holograms (${s.fps} fps). The 3D core runs on screen 1.` : `Right now: ${MODE_NAME[s.mode]}${s.lowDpr ? ' at 1x resolution' : ''} · ${s.fps} fps drawn${s.busyFps ? ` · ${s.busyFps} fps while moving` : ''}`;
   const dropped = p.perf === 'auto' && auto && auto.mode === 'minimal';
+  const open = [1, 2, 3].filter(alive).length;
   document.getElementById('modal') || document.body.insertAdjacentHTML('beforeend', '<div id="modal"></div>');
   $('#modal').innerHTML = `<div class="nmodal" data-mclose><div class="panel mbox settings" role="dialog" aria-modal="true" aria-label="Settings">
    <div class="ph"><h3>Settings<small>this device</small></h3><button class="x" data-mclose aria-label="Close">✕</button></div>
+   <div class="sgroup"><div class="label">Screens</div>
+    ${opt('screens', 'auto', p.screens, 'Auto (recommended)', `Spreads NOVA over the windows you have open (${open} open now)${nMon ? ` · ${nMon} monitor${nMon === 1 ? '' : 's'} found` : ''}.`)}
+    ${opt('screens', '1', p.screens, '1 screen', 'Everything on one screen, like before.')}
+    ${opt('screens', '2', p.screens, '2 screens', 'Screen 1 Command · screen 2 Team plus Build & Business.')}
+    ${opt('screens', '3', p.screens, '3 screens', 'Screen 1 Command · screen 2 Team · screen 3 Build & Business.')}
+    <ol class="steps"><li>On your main monitor, click <b>Set up screens</b>${canPlace() ? ' and allow “Window management” once' : ''}.</li><li>Click <b>Full screen</b> on each new window (or press <kbd class="k">F11</kbd>).</li><li>${canPlace() ? 'If a window lands on the wrong monitor, click <b>Place on monitor</b> on it, or drag it over.' : 'Drag each window to its monitor first. The big number shows which screen is which.'}</li></ol>
+    <div class="btns">${SEC ? (canPlace() ? '<button class="btn sm" data-place>Place on monitor</button>' : '') : '<button class="btn sm" data-setup>Set up screens</button>'}<button class="btn sm" data-ident>Identify screens</button><button class="btn sm" data-fullscreen>${isFs() ? 'Exit full screen' : 'Full screen'}</button></div>
+    <details class="adv"><summary>One window stretched across two monitors</summary>
+     ${opt('wide', 'auto', p.wide, 'Only if it really spans both (default)', 'Separate windows fit far better: each fills its own screen.')}
+     ${opt('wide', 'off', p.wide, 'Never stretch', 'Always the normal layout, even in one very wide window.')}
+     ${opt('wide', 'on', p.wide, 'Stretched across both', 'One window, Team and Build on the right half. Fits badly when the screens differ in size or height.')}
+    </details>
+   </div>
    <div class="sgroup"><div class="label">Performance</div>
     ${opt('perf', 'auto', p.perf, 'Smooth (recommended)', 'Lighter glow, full speed only while you move things. Switches itself to Minimal if your computer struggles.')}
     ${opt('perf', 'full', p.perf, 'Full effects', 'Bloom glow, sharper edges, faster idle animation. Needs a strong graphics card.')}
-    ${opt('perf', 'minimal', p.perf, 'Minimal', 'No 3D background and a still core. The lightest option.')}
+    ${opt('perf', 'minimal', p.perf, 'Minimal', 'No 3D background, a still core and still holograms. The lightest option.')}
     <div class="mutedt sm" style="margin-top:.5rem">${esc(now)}${dropped ? ' · <button class="lnkbtn" data-perfretry>Try Smooth again</button>' : ''}</div>
     ${chk('glass', 'Frosted glass blur', 'Blurs the 3D scene behind every panel. Looks nice, but it’s the slowest effect.')}
     ${chk('fps', 'Show frame rate', 'Adds a small fps counter to the top bar.')}
-   </div>
-   <div class="sgroup"><div class="label">Two screens</div>
-    <ol class="steps"><li>Use NOVA on your monitor and click <b>Screen 2</b>.</li><li>${canPlace() ? 'Click <b>Place on other monitor</b> (allow “Window management” once), or drag' : 'Drag'} the new window onto your laptop screen.</li><li>Click <b>Full screen</b> on each window (or press <kbd class="k">F11</kbd>).</li></ol>
-    <div class="btns">${SCREEN2 ? '' : '<button class="btn sm" data-screen2>Open Screen 2</button>'}${canPlace() ? '<button class="btn sm" data-place>Place on other monitor</button>' : ''}<button class="btn sm" data-fullscreen>${isFs() ? 'Exit full screen' : 'Full screen'}</button></div>
-    ${opt('wide', 'auto', p.wide, 'Separate windows (recommended)', 'Each window fits its own screen. The stretched layout only turns on if one window really spans both monitors.')}
-    ${opt('wide', 'off', p.wide, 'Never stretch', 'Always the normal layout, even in one very wide window.')}
-    ${opt('wide', 'on', p.wide, 'Stretched across both', 'One window, screen 2 on the right half. Fits badly when the screens differ in size or height.')}
    </div>
    <div class="btns" style="margin-top:1rem"><button class="btn" data-mclose>Done</button></div></div></div>`;
 }
@@ -927,10 +1242,10 @@ function toast(html, ms = 9000, id = '') {
 }
 function hideToast(id) { const t = $('#ntoast'); if (t && (!id || t.dataset.id === id)) t.remove(); }
 function firstTips() {
-  const k = 'nova.tip.fs.' + (SCREEN2 ? 2 : 1);
-  if (isFs() || lsGet(k)) return;
+  const k = 'nova.tip.fs.' + SCR;
+  if (isFs() || lsGet(k) || $('#fsask')) return;
   lsSet(k, 1);
-  toast(`<div><b>Tip</b> <span class="mutedt">Press <kbd class="k">F11</kbd> or click <b>Full screen</b> to hide the browser bars.${SCREEN2 ? '' : ' Two monitors? Click <b>Screen 2</b> to open the second window.'}</span></div><button class="btn" data-fullscreen>Full screen</button>`, 14000, 'fs');
+  toast(`<div><b>Tip</b> <span class="mutedt">Press <kbd class="k">F11</kbd> or click <b>Full screen</b> to hide the browser bars.${SEC ? '' : ' More monitors? Click <b>Set up screens</b> to spread NOVA over two or three.'}</span></div><button class="btn" data-fullscreen>Full screen</button>`, 14000, 'fs');
 }
 function wideTip() {
   if (lsGet('nova.tip.wide')) return; lsSet('nova.tip.wide', 1);
@@ -939,7 +1254,7 @@ function wideTip() {
 // stretched mode: split where the monitors actually meet instead of assuming two equal halves
 function wideSplit() {
   const root = document.documentElement;
-  if (root.getAttribute('data-n3d-layout') !== 'wide' || SCREEN2) { root.style.removeProperty('--split-a'); return; }
+  if (root.getAttribute('data-n3d-layout') !== 'wide' || SEC) { root.style.removeProperty('--split-a'); return; }
   const vx = window.screenX + Math.max(0, (window.outerWidth - window.innerWidth) / 2);
   let edge = null;
   if (screenSD && screenSD.screens) { const first = screenSD.screens.find((s) => vx >= s.left && vx < s.left + s.width); if (first) edge = first.left + first.width - vx; }
@@ -961,24 +1276,44 @@ screenDetails(false).then(() => wideSplit()); // no prompt: only if already allo
 let timers = [];
 function startLive() {
   stopLive();
+  timers.push(setInterval(tickAgo, 30000));
+  if (SEC) {
+    // screens 2 and 3 get their data from screen 1; they only fetch the public feeds themselves when screen 1 isn't open
+    chan.postMessage({ t: 'hello', s: SCR });
+    timers.push(setTimeout(() => { if (!relayAlive()) { refreshGitHub(); checkCalo(); } }, 4000));
+    timers.push(setInterval(() => { if (!relayAlive()) { refreshGitHub(); checkCalo(); refreshStatus(); } }, REFRESH_MS));
+    return;
+  }
   refreshGitHub(); checkCalo();
   timers.push(setInterval(() => { refreshGitHub(); checkCalo(); refreshStatus(); }, REFRESH_MS));
-  timers.push(setInterval(tickAgo, 30000));
-  if (!SCREEN2) timers.push(setInterval(() => { if (document.visibilityState === 'visible') refreshConn(); }, 90000));
+  timers.push(setInterval(() => { if (document.visibilityState === 'visible') refreshConnAll(); }, 90000));
   document.addEventListener('visibilitychange', onVis);
 }
-function stopLive() { timers.forEach(clearInterval); timers = []; document.removeEventListener('visibilitychange', onVis); }
+function stopLive() { timers.forEach((t) => { clearInterval(t); clearTimeout(t); }); timers = []; document.removeEventListener('visibilitychange', onVis); }
 function onVis() { if (document.visibilityState === 'visible') { refreshGitHub(); checkCalo(); if (Date.now() - state.statusLoadedAt > 60000) refreshStatus(); } }
 function lock(msg) {
-  n3d.shown = false; apiLogout(); if ($('#modal')) $('#modal').innerHTML = '';
-  localStorage.removeItem(LS.pass); keyCache.clear(); state.status = null; stopLive(); reset3D();
-  $('#view').innerHTML = ''; $('#sheet').innerHTML = ''; ['#view', '#s2-feed', '#s2-logs'].forEach((k) => { if ($(k)) { $(k).innerHTML = ''; $(k).__html = ''; } });
-  if (N3) N3.setPaused(true); hideToast();
+  n3d.shown = false; apiLogout(); conn.cursor = undefined; conn.copilot = undefined; if ($('#modal')) $('#modal').innerHTML = '';
+  localStorage.removeItem(LS.pass); keyCache.clear(); state.status = null; relayAt = 0; stopLive(); reset3D();
+  $('#sheet').innerHTML = '';
+  ['#view', '#s2bar', ...Object.keys(FILL).map((k) => '#x-' + k)].forEach((k) => { const el = $(k); if (el) { el.innerHTML = ''; el.__html = ''; } });
+  if (N3) { if (SEC) N3.back(); N3.setPaused(true); } hideToast(); $('#fsask') && $('#fsask').remove();
   $('#lock').hidden = false; $('#screen').setAttribute('aria-hidden', 'true');
   const m = $('#lockmsg'); m.textContent = msg || 'Locked. Enter your passphrase to open NOVA.'; m.className = 'lockmsg' + (msg ? ' err' : '');
   $('#pass').value = ''; setTimeout(() => $('#pass').focus(), 50);
 }
-function showApp() { n3d.shown = true; $('#lock').hidden = true; $('#screen').removeAttribute('aria-hidden'); if (N3) N3.setPaused(false); route(); startLive(); setTimeout(firstTips, 1500); }
+const SETUP = new URLSearchParams(location.search).get('setup') === '1';
+if (SETUP) { const u = new URL(location.href); u.searchParams.delete('setup'); history.replaceState(null, '', u.href); }
+function showApp() {
+  n3d.shown = true; $('#lock').hidden = true; $('#screen').removeAttribute('aria-hidden'); if (N3) N3.setPaused(false);
+  route(); startLive();
+  if (SEC) { showScreenLabel(); if (SETUP && !isFs()) fsAsk(); }
+  setTimeout(firstTips, 1500);
+}
+// another screen unlocked NOVA: reuse the stored passphrase here too
+async function autoUnlock() {
+  const pass = localStorage.getItem(LS.pass); if (!pass || unlocked()) return;
+  try { state.status = await fetchStatus(pass); state.statusErr = ''; state.statusLoadedAt = Date.now(); showApp(); if (!SEC) apiLogin(pass).then(refreshConnAll); } catch (e) {}
+}
 $('#lockring').innerHTML = coreRing([{ state: 'ok' }, { state: 'ok' }, { state: 'ok' }], false);
 $('#lockform').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -988,7 +1323,7 @@ $('#lockform').addEventListener('submit', async (e) => {
   try {
     state.status = await fetchStatus(pass); state.statusErr = ''; state.statusLoadedAt = Date.now();
     localStorage.setItem(LS.pass, pass); m.textContent = ''; showApp();
-    if (!SCREEN2) apiLogin(pass).then(refreshConn); // silent sign-in to the secure service (nova-api)
+    if (!SEC) apiLogin(pass).then(refreshConnAll); // silent sign-in to the secure service (nova-api), screen 1 only
   } catch (err) {
     m.className = 'lockmsg err';
     m.textContent = err instanceof WrongPass ? 'That passphrase didn’t work. Check the words and dashes.' : 'Couldn’t reach the status file. Check your connection.';
@@ -1000,12 +1335,15 @@ if (N3) { try { N3.init(); } catch (e) { console.warn('NOVA 3D unavailable:', e.
 document.documentElement.classList.toggle('glass', !!prefs().glass);
 setInterval(tick, 1000);
 (async () => {
+  applyRole();
   const pass = localStorage.getItem(LS.pass);
-  if (!pass) { lock(); $('#lockmsg').className = 'lockmsg'; $('#lockmsg').textContent = 'Remembered on this device until you press Lock.'; return; }
+  if (!pass) { lock(); $('#lockmsg').className = 'lockmsg'; $('#lockmsg').textContent = SEC ? 'Unlock NOVA on screen 1, or enter your passphrase here.' : 'Remembered on this device until you press Lock.'; if (SEC) showScreenLabel(); return; }
   showApp();
-  if (!SCREEN2) refreshConn();
+  if (!SEC) refreshConnAll();
   await refreshStatus();
 })();
-window.addEventListener('nova:conn', () => { if ($('#lock').hidden) render(); });
+window.addEventListener('nova:conn', () => { if (unlocked()) render(); });
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW', e.message)));
+
+window.addEventListener('pageshow', () => { closing = false; beat(); });
