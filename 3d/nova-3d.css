@@ -1,63 +1,21 @@
-/* NOVA 3D layer styles. Uses the dashboard's CSS variables when present. */
+/* NOVA 3D core v2 styles: the core canvas, node labels (shown on hover) and unread badges. */
 :root{--n3d-a:var(--a,64,214,255);--n3d-warn:var(--warn,255,184,77);--n3d-text:var(--text,#e2f6ff);--n3d-muted:var(--muted,#7f9db3);
-  --n3d-mono:var(--font-mono,'JetBrains Mono',ui-monospace,monospace);--n3d-hd:var(--font-hd,'Rajdhani','Inter',sans-serif)}
-#nova-3d{position:fixed;inset:0;width:100vw;height:100vh;height:100lvh;display:block;z-index:0;pointer-events:none;background:var(--bg,#03080f)}
-.n3d-overlay{position:fixed;inset:0;pointer-events:none;z-index:40}
-.n3d-anchor{touch-action:none;cursor:grab;-webkit-user-select:none;user-select:none}
-.n3d-anchor:active{cursor:grabbing}
-.n3d-surface.n3d-pointer,.n3d-surface.n3d-pointer .n3d-anchor{cursor:pointer}
-
-/* data node labels (real buttons: keyboard + screen-reader friendly) */
-.n3d-node-label{position:absolute;left:0;top:0;pointer-events:auto;display:flex;flex-direction:column;align-items:center;gap:1px;
-  font:600 0.75rem/1.1 var(--n3d-mono);letter-spacing:.16em;text-transform:uppercase;color:rgb(var(--n3d-a));white-space:nowrap;
-  background:rgba(3,10,18,.72);border:1px solid rgba(var(--n3d-a),.35);border-radius:0.25rem;padding:0.3125rem 0.5625rem;cursor:pointer;
-  transition:border-color .2s,background .2s,color .2s;text-shadow:0 0 0.625rem rgba(var(--n3d-a),.45);will-change:transform}
-.n3d-node-label:hover,.n3d-node-label.n3d-hot,.n3d-node-label:focus-visible{border-color:rgba(var(--n3d-a),.9);background:rgba(10,40,60,.85);color:#fff;outline:none}
-.n3d-node-label .n3d-nl-s{font-size:0.5938rem;letter-spacing:.14em;color:var(--n3d-muted);text-shadow:none}
+  --n3d-mono:var(--font-mono,'JetBrains Mono',ui-monospace,monospace)}
+#nova-3d{position:fixed;left:0;top:0;width:10px;height:10px;display:block;z-index:3;touch-action:none;cursor:grab;background:transparent}
+.n3d-overlay{position:fixed;inset:0;pointer-events:none;z-index:4}
+/* labels: invisible at rest; faint while the pointer is near the core; bright on the hovered node */
+.n3d-node-label{position:absolute;left:0;top:0;pointer-events:none;opacity:0;display:flex;flex-direction:column;align-items:center;gap:1px;
+  font:600 .78rem/1.1 var(--n3d-mono);letter-spacing:.16em;text-transform:uppercase;color:rgb(var(--n3d-a));white-space:nowrap;
+  background:rgba(3,10,18,.78);border:1px solid rgba(var(--n3d-a),.35);border-radius:.25rem;padding:.32rem .6rem;cursor:pointer;
+  transition:opacity .18s,border-color .15s,background .15s,color .15s;text-shadow:0 0 .6rem rgba(var(--n3d-a),.45)}
+.n3d-near .n3d-node-label{opacity:.55;pointer-events:auto}
+.n3d-overlay .n3d-node-label.n3d-hot,.n3d-node-label:focus-visible{opacity:1;pointer-events:auto;border-color:rgba(var(--n3d-a),.95);background:rgba(10,40,60,.92);color:#fff;outline:none}
+.n3d-node-label.n3d-primary{font-size:.92rem;padding:.4rem .75rem}
+.n3d-node-label.n3d-unread{border-color:rgba(var(--n3d-warn),.8);color:rgb(var(--n3d-warn))}
+.n3d-node-label .n3d-nl-s{font-size:.6rem;letter-spacing:.14em;color:var(--n3d-muted);text-shadow:none}
 .n3d-node-label.n3d-muted{color:var(--n3d-muted);border-style:dashed;text-shadow:none}
-
-.n3d-tip{position:absolute;left:0;top:0;font:600 0.75rem/1 var(--n3d-mono);letter-spacing:.08em;color:var(--n3d-text);background:rgba(3,10,18,.9);
-  border:1px solid rgba(var(--n3d-a),.5);padding:0.375rem 0.5625rem;border-radius:0.25rem;opacity:0;transition:opacity .15s;white-space:nowrap}
-
-/* holographic detail panel */
-.n3d-detail{position:fixed;pointer-events:auto;display:flex;flex-direction:column;gap:0.875rem;padding:1.25rem 1.375rem;border-radius:0.5rem;overflow:hidden;
-  background:linear-gradient(160deg,rgba(14,44,68,.82),rgba(4,16,28,.9));border:1px solid rgba(var(--n3d-a),.55);
-  box-shadow:0 0 0 1px rgba(0,0,0,.3),0 0 2.5rem rgba(var(--n3d-a),.18),inset 0 0 3.75rem rgba(var(--n3d-a),.06);color:var(--n3d-text)}
-.n3d-detail[hidden]{display:none}
-.n3d-detail::before{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(115deg,rgba(255,255,255,.06),transparent 35%);}
-.n3d-detail-hd{display:flex;align-items:flex-start;justify-content:space-between;gap:0.75rem}
-.n3d-detail-k{font:600 0.6562rem/1 var(--n3d-mono);letter-spacing:.22em;text-transform:uppercase;color:var(--n3d-muted)}
-.n3d-detail-t{font:700 1.625rem/1.1 var(--n3d-hd);letter-spacing:.1em;text-transform:uppercase;color:var(--acc2,#9beaff);margin:0.375rem 0 0;text-shadow:0 0 1rem rgba(var(--n3d-a),.45)}
-.n3d-back{flex:none;display:inline-flex;align-items:center;gap:0.5rem;font:600 0.8125rem/1 var(--n3d-hd);letter-spacing:.12em;text-transform:uppercase;color:var(--n3d-text);
-  background:rgba(var(--n3d-a),.10);border:1px solid rgba(var(--n3d-a),.55);border-radius:0.25rem;padding:0.5rem 0.75rem;cursor:pointer}
-.n3d-back:hover,.n3d-back:focus-visible{background:rgba(var(--n3d-a),.22);outline:none;box-shadow:0 0 0.75rem rgba(var(--n3d-a),.4)}
-.n3d-back kbd{font:500 0.625rem/1 var(--n3d-mono);color:var(--n3d-muted);border:1px solid rgba(255,255,255,.14);border-radius:0.1875rem;padding:2px 0.3125rem}
-.n3d-detail-body{flex:1;min-height:0;overflow:auto;font-size:0.9375rem;line-height:1.45}
-.n3d-detail-scan{position:absolute;left:0;right:0;top:var(--n3d-scan,-10%);height:2px;background:rgba(var(--n3d-a),.9);box-shadow:0 0 1rem 0.1875rem rgba(var(--n3d-a),.6);pointer-events:none}
-.n3d-detail:not([style*="--n3d-scan"]) .n3d-detail-scan{display:none}
-.n3d-detail.n3d-compact .n3d-detail-body{flex:none}
-.n3d-remote-note{color:var(--n3d-muted);font:600 0.8125rem var(--n3d-mono);letter-spacing:.08em}
-.n3d-detail[data-mode="sheet"]{border-radius:0.875rem}
-
-/* panels: glass, pointer glare edge, lift, boot scan */
-.n3d-panel{transform-origin:50% 50%;backface-visibility:hidden}
-.n3d-fx{position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:3}
-.n3d-fx.n3d-glass{background:linear-gradient(118deg,rgba(255,255,255,.045) 0%,rgba(255,255,255,.012) 28%,transparent 42%)}
-.n3d-fx::before{content:"";position:absolute;inset:-1px;border-radius:inherit;padding:1px;opacity:0;transition:opacity .3s;
-  background:radial-gradient(16.25rem circle at var(--mx,50%) var(--my,50%),rgba(190,240,255,.95),rgba(var(--n3d-a),.35) 35%,transparent 65%);
-  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box exclude,linear-gradient(#000 0 0)}
-.n3d-fx::after{content:"";position:absolute;inset:0;border-radius:inherit;opacity:0;transition:opacity .3s;
-  background:radial-gradient(26.25rem circle at var(--mx,50%) var(--my,50%),rgba(var(--n3d-a),.07),transparent 60%)}
-.n3d-hover>.n3d-fx::before,.n3d-hover>.n3d-fx::after{opacity:1}
-.n3d-panel.n3d-lifted{box-shadow:0 0 0 1px rgba(0,0,0,.2),0 1.125rem 2.5rem rgba(0,0,0,.35),0 0 1.625rem rgba(var(--n3d-a),.12),inset 0 0 2.5rem rgba(var(--n3d-a),.05)}
-.n3d-booting>.n3d-fx{background:repeating-linear-gradient(180deg,rgba(var(--n3d-a),.10) 0 1px,transparent 1px 0.1875rem)}
-.n3d-booting>.n3d-fx::after{opacity:1;top:auto;bottom:auto;height:2px;top:calc(var(--n3d-scan,0%) - 2px);background:rgba(var(--n3d-a),.95);box-shadow:0 0 0.875rem 0.1875rem rgba(var(--n3d-a),.55)}
-
-/* holograms are drawn on the shared 3D canvas inside these hosts */
-.n3d-holo-host{cursor:grab;touch-action:pan-y}
-.n3d-holo-host:active{cursor:grabbing}
-
-@media (prefers-reduced-motion: reduce){.n3d-node-label,.n3d-fx::before,.n3d-fx::after,.n3d-tip{transition:none}}
-.n3d-reduced .n3d-node-label,.n3d-reduced .n3d-fx::before,.n3d-reduced .n3d-fx::after{transition:none}
-.n3d-bay-host{position:absolute;inset:0}
-/* --n3d-focus (0..1) is set on <html> while flying to/from a node: use it to fade overview text, e.g. .greet{opacity:calc(1 - var(--n3d-focus,0))} */
+/* unread badge on a node: always visible while there is something new */
+.n3d-badge{position:absolute;left:0;top:0;min-width:1.25rem;height:1.25rem;padding:0 .35rem;border-radius:.7rem;display:grid;place-items:center;
+  font:700 .7rem/1 var(--n3d-mono);color:#1a1206;background:rgb(var(--n3d-warn));box-shadow:0 0 .8rem rgba(var(--n3d-warn),.8)}
+.n3d-badge[hidden]{display:none}
+@media (prefers-reduced-motion: reduce){.n3d-node-label{transition:none}}

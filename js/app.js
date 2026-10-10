@@ -1,50 +1,53 @@
-// NOVA command center v1 — vanilla JS, no build step.
-// Private data lives only in data/status.enc.json (AES-GCM, PBKDF2-SHA256 key from a passphrase).
-// Live data: public GitHub REST API (no token) and the public Calo site.
+// NOVA 2 — a minimal home (only the grid and, on screen 1, the 3D core). Every tab lives in the core as a node.
+// Open a node and its tab appears as a panel; throw panels to the left, centre or right screen.
+// Vanilla JS, no build step. Private data lives only in data/status.enc.json (AES-GCM, PBKDF2-SHA256 key from a passphrase).
+// Live data: the public GitHub REST API and the public Calo site. Screen 1 alone signs in to nova-api and relays to the others.
+import { conn, api, apiLogin, apiLogout, refreshConn, pollInbox, isOn, sendDirect, confirmCommand, openConnections, connRows, modal, closeModal, TARGETS, esc } from './connect.js';
+import { drawGrid } from './grid.js';
 
-import { cmdBar, repliesStrip, apiLogin, apiLogout, refreshConn, openConnections, conn, api, isOn } from './connect.js';
-
+const VERSION = '2.0.0';
 const REPO = 'tyler467890/student-day-planner';
 const CALO = 'https://tyler467890.github.io/student-day-planner/';
 const TZ = 'America/Halifax';
 const NOTION_TASKS = 'https://app.notion.com/p/3e6c427ef5e0803083c0d095c0f01120';
-const GROK_APP_URL = ''; // set when a Grok Bot app deep link is known; empty = "coming soon" tooltip
-const REFRESH_MS = 5 * 60 * 1000;
+const REFRESH_MS = 5 * 60 * 1000, INBOX_MS = 20 * 1000;
 const AAD = new TextEncoder().encode('nova-status:v1');
-const LS = { pass: 'nova.passphrase', gh: 'nova.github.v1', calo: 'nova.calo.v1' };
+const LS = { pass: 'nova.passphrase', gh: 'nova.github.v1', calo: 'nova.calo.v1', layout: 'nova.layout.v2', prefs: 'nova.prefs', auto: 'nova.perf.auto',
+  sent: 'nova.chat.sent', seen: 'nova.chat.seen', draft: 'nova.chat.draft', target: 'nova.cmd.target', assign: 'nova.scr.assign' };
 
 const $ = (s, r = document) => r.querySelector(s);
-const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const safeUrl = (u) => { try { const x = new URL(u, location.href); return /^https?:$/.test(x.protocol) ? x.href : ''; } catch { return ''; } };
 const lsGet = (k) => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+const root = document.documentElement;
+
+// ---------- screens: which window this is and where it sits ----------
+const SCR = +root.getAttribute('data-screen') || 1;   // 1 holds the core and the session · 2 · 3
+const SEC = SCR !== 1;
+const POS = ['left', 'centre', 'right'];
+const POS_NAME = { left: 'Left', centre: 'Centre', right: 'Right' };
 
 // ---------- state ----------
 const state = {
-  view: 'overview', selAgent: 0, teamFilter: 'all',
   status: null, statusErr: '', statusLoadedAt: 0,
   gh: lsGet(LS.gh) || { cache: {}, prs: null, run: null, commit: null, fetchedAt: 0, error: '', rateResetAt: 0 },
   calo: lsGet(LS.calo) || { checkedAt: 0, online: null },
 };
-window.NOVA = { state, conn, version: '1.4.0', get screen() { return SCR; }, get role() { return ROLE; } }; // read-only hook for add-on layers and tests
-const emit = (name, detail) => window.dispatchEvent(new CustomEvent('nova:' + name, { detail }));
+window.NOVA = { state, conn, version: VERSION, get screen() { return SCR; }, get layout() { return L; }, get position() { return posOf(SCR); } }; // read-only hook for tests
 
-// ---------- time ----------
+// ---------- time (Halifax) ----------
 const fmt = (o) => new Intl.DateTimeFormat('en-US', { timeZone: TZ, ...o });
 const fTime = fmt({ hour: 'numeric', minute: '2-digit' });
-const fHour = fmt({ hour: 'numeric', hourCycle: 'h23' });
-const fDate = fmt({ weekday: 'short', month: 'short', day: 'numeric' });
-const fZone = fmt({ timeZoneName: 'short' });
 const fDay = fmt({ month: 'short', day: 'numeric' });
 const fYmd = fmt({ year: 'numeric', month: '2-digit', day: '2-digit' });
+const fZone = fmt({ timeZoneName: 'short' });
 function clockParts(d = new Date()) {
   const t = fTime.formatToParts(d);
   const hm = t.filter((p) => ['hour', 'literal', 'minute'].includes(p.type)).map((p) => p.value).join('').trim();
   const ap = (t.find((p) => p.type === 'dayPeriod') || {}).value || '';
   const zone = (fZone.formatToParts(d).find((p) => p.type === 'timeZoneName') || {}).value || 'AT';
-  return { hm, ap, zone, date: fDate.format(d).replace(',', ''), hour: +fHour.format(d) % 24 };
+  return { hm, ap, zone };
 }
-function greeting() { const h = clockParts().hour; return h >= 5 && h < 12 ? 'Good morning' : h >= 12 && h < 17 ? 'Good afternoon' : 'Good evening'; }
 function ago(iso) {
   if (!iso) return '';
   const t = typeof iso === 'number' ? iso : Date.parse(iso);
@@ -64,11 +67,16 @@ function dayLabel(iso) {
   const day = fYmd.format(d) === today ? 'Today' : fYmd.format(d) === y ? 'Yesterday' : fDay.format(d);
   return iso.length === 10 ? day : day + ', ' + fTime.format(d);
 }
+function stamp(iso) { // chat bubble time: "11:42 AM AT" today, "Oct 9 · 3:10 PM AT" otherwise
+  const t = Date.parse(iso); if (isNaN(t)) return '';
+  const d = new Date(t), z = clockParts(d).zone;
+  return (fYmd.format(d) === fYmd.format(new Date()) ? '' : fDay.format(d) + ' · ') + fTime.format(d) + ' ' + z;
+}
 
-// ---------- icons & svg parts ----------
-const R = (n) => Math.round(n * 100) / 100;
+// ---------- icons ----------
+const Rn = (n) => Math.round(n * 100) / 100;
 const polar = (cx, cy, r, deg) => { const a = (deg - 90) * Math.PI / 180; return [cx + r * Math.cos(a), cy + r * Math.sin(a)]; };
-const arc = (cx, cy, r, a0, a1) => { const [x0, y0] = polar(cx, cy, r, a0), [x1, y1] = polar(cx, cy, r, a1); return `M${R(x0)} ${R(y0)} A${r} ${r} 0 ${(a1 - a0) > 180 ? 1 : 0} 1 ${R(x1)} ${R(y1)}`; };
+const arc = (cx, cy, r, a0, a1) => { const [x0, y0] = polar(cx, cy, r, a0), [x1, y1] = polar(cx, cy, r, a1); return `M${Rn(x0)} ${Rn(y0)} A${r} ${r} 0 ${(a1 - a0) > 180 ? 1 : 0} 1 ${Rn(x1)} ${Rn(y1)}`; };
 const ICONS = {
   code: '<path d="M10 9 L5 14 L10 19 M18 9 L23 14 L18 19 M15.5 7 L12.5 21"/>',
   blender: '<circle cx="15" cy="15" r="5.5"/><circle cx="15" cy="15" r="2"/><path d="M4 8 L13 11 M6 17 L10 15"/>',
@@ -76,10 +84,8 @@ const ICONS = {
   branch: '<circle cx="9" cy="7" r="2.3"/><circle cx="9" cy="21" r="2.3"/><circle cx="19" cy="10" r="2.3"/><path d="M9 9.3 V18.7 M19 12.3 C19 16 9 15 9 18.7"/>',
   notes: '<rect x="7" y="5" width="14" height="18" rx="2"/><path d="M10.5 10 H17.5 M10.5 14 H17.5 M10.5 18 H15"/>',
   spark: '<path d="M14 4 L16 12 L24 14 L16 16 L14 24 L12 16 L4 14 L12 12 Z"/>',
-  mic: '<rect x="11" y="5" width="6" height="11" rx="3"/><path d="M8 13 C8 20 20 20 20 13 M14 19.5 V23"/>',
   mail: '<rect x="5" y="8" width="18" height="13" rx="2"/><path d="M5 9 L14 16 L23 9"/>',
   bolt: '<path d="M15 4 L7 16 H13 L12 24 L21 11 H15 Z"/>',
-  home: '<path d="M5 13 L14 5 L23 13 M8 11 V22 H20 V11"/>',
   users: '<circle cx="11" cy="10" r="3.5"/><path d="M4 22 C4 16 18 16 18 22"/><circle cx="19" cy="10" r="2.5"/><path d="M19 15 C22 15 24 17 24 21"/>',
   chart: '<path d="M5 22 H23 M8 18 V13 M13 18 V8 M18 18 V11"/>',
   rabbit: '<ellipse cx="11" cy="8" rx="2.2" ry="5"/><ellipse cx="17" cy="8" rx="2.2" ry="5"/><circle cx="14" cy="17" r="6"/>',
@@ -90,65 +96,33 @@ const ICONS = {
   alert: '<path d="M14 5 L24 22 H4 Z M14 12 V16 M14 19 V19.5"/>',
   commit: '<circle cx="14" cy="14" r="4"/><path d="M4 14 H10 M18 14 H24"/>',
   full: '<path d="M5 11 V5 H11 M17 5 H23 V11 M23 17 V23 H17 M11 23 H5 V17"/>',
-  exitfull: '<path d="M11 5 V11 H5 M23 11 H17 V5 M17 23 V17 H23 M5 17 H11 V23"/>',
   gear: '<circle cx="14" cy="14" r="3.5"/><path d="M14 4 V7 M14 21 V24 M4 14 H7 M21 14 H24 M6.9 6.9 L9 9 M19 19 L21.1 21.1 M6.9 21.1 L9 19 M19 9 L21.1 6.9"/>',
   monitor: '<rect x="4" y="6" width="20" height="13" rx="1.5"/><path d="M10 23 H18 M14 19 V23"/>',
+  chat: '<path d="M5 7 H23 V18 H13 L8 22 V18 H5 Z"/>',
+  grid: '<rect x="5" y="5" width="7" height="7"/><rect x="16" y="5" width="7" height="7"/><rect x="5" y="16" width="7" height="7"/><rect x="16" y="16" width="7" height="7"/>',
+  send: '<path d="M5 14 L23 6 L17 23 L13 15 Z M13 15 L23 6"/>',
+  menu: '<path d="M6 9 H22 M6 14 H22 M6 19 H22"/>',
+  clear: '<path d="M7 7 L21 21 M21 7 L7 21"/>',
 };
-const ic = (n, s = 24, col = 'var(--acc)', sw = 1.6) => `<svg width="${s}" height="${s}" viewBox="0 0 28 28" fill="none" stroke="${col}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
-const hexIc = (n) => `<div class="ic"><svg class="hex" viewBox="0 0 52 52" fill="none"><path d="M26 2 L47 14 L47 38 L26 50 L5 38 L5 14 Z" stroke="var(--acc)" stroke-width="1.3" fill="rgba(64,214,255,.07)"/></svg>${ic(n, 26)}</div>`;
-const brandMark = (s = 34) => `<svg class="mark" width="${s}" height="${s}" viewBox="0 0 40 40" fill="none" aria-hidden="true">
- <path d="M20 2 L36 11 L36 29 L20 38 L4 29 L4 11 Z" stroke="var(--acc)" stroke-width="1.5" opacity=".9"/>
- <circle cx="20" cy="20" r="8" stroke="var(--acc)" stroke-width="1.5"/><circle cx="20" cy="20" r="3.5" fill="var(--acc)" style="filter:drop-shadow(0 0 0.25rem var(--acc))"/>
- <path d="M20 2 V8 M36 29 L31 26 M4 29 L9 26" stroke="var(--acc)" stroke-width="1.5" opacity=".7"/></svg>`;
+const ic = (n, s = 24, col = 'currentColor', sw = 1.6) => `<svg width="${s}" height="${s}" viewBox="0 0 28 28" fill="none" stroke="${col}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ''}</svg>`;
+const hexIc = (n) => `<div class="ic"><svg class="hex" viewBox="0 0 52 52" fill="none"><path d="M26 2 L47 14 L47 38 L26 50 L5 38 L5 14 Z" stroke="var(--acc)" stroke-width="1.3" fill="rgba(64,214,255,.07)"/></svg>${ic(n, 28, 'var(--acc)')}</div>`;
 const COL = { ok: 'rgb(84,232,170)', warn: 'rgb(255,184,77)', bad: 'rgb(255,107,107)', acc: 'rgb(64,214,255)', dim: 'rgba(64,214,255,.25)' };
-
-// Arc-reactor core ring. arcs = [{state:'ok'|'warn'|'bad'|'pending', title}]
-function coreRing(arcs, withClock = true) {
+// SVG ring, used for the lock screen and as the core when WebGL isn't available
+function coreRing() {
   let ticks = '';
   for (let i = 0; i < 72; i++) { const d = i * 5, long = i % 6 === 0; const [x0, y0] = polar(200, 200, 192, d), [x1, y1] = polar(200, 200, long ? 182 : 187, d);
-    ticks += `<line x1="${R(x0)}" y1="${R(y0)}" x2="${R(x1)}" y2="${R(y1)}" stroke="var(--acc)" stroke-width="${long ? 1.6 : 1}" opacity="${long ? .8 : .35}"/>`; }
-  const segs = [[-55, 55], [65, 175], [185, 295]];
-  let a = '';
-  segs.forEach(([a0, a1], i) => {
-    const st = (arcs[i] || {}).state || 'pending';
-    const col = st === 'ok' ? COL.acc : st === 'warn' ? COL.warn : st === 'bad' ? COL.bad : COL.dim;
-    a += `<g><title>${esc((arcs[i] || {}).title || '')}</title><path d="${arc(200, 200, 168, a0, a1)}" stroke="rgba(64,214,255,.15)" stroke-width="8" fill="none" stroke-linecap="round"/>`;
-    if (st !== 'pending') a += `<path d="${arc(200, 200, 168, a0, a1)}" stroke="${col}" stroke-width="8" fill="none" stroke-linecap="round" style="filter:drop-shadow(0 0 0.375rem ${col})"/>`;
-    a += '</g>';
-  });
-  let segIn = '';
-  for (let i = 0; i < 10; i++) { const d = i * 36 + 4; segIn += `<path d="${arc(200, 200, 128, d, d + 28)}" stroke="var(--acc)" stroke-width="10" fill="none" opacity=".55"/>`; }
-  const c = clockParts();
-  const inner = withClock ? `<text data-clock x="200" y="190" text-anchor="middle" font-family="Orbitron" font-weight="600" font-size="46" fill="#e2f6ff" style="filter:drop-shadow(0 0 0.625rem rgba(64,214,255,.6))">${c.hm}</text>
-    <text data-ampm x="200" y="222" text-anchor="middle" font-family="JetBrains Mono" font-size="13" letter-spacing="3" fill="#9beaff">${c.ap} · ${c.zone}</text>
-    <text x="200" y="244" text-anchor="middle" font-family="JetBrains Mono" font-size="11" letter-spacing="2.5" fill="#7f9db3">HALIFAX</text>` : '';
-  return `<svg viewBox="0 0 400 400" fill="none" role="img" aria-label="System status ring">
-   <defs><radialGradient id="cg" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="rgba(64,214,255,.30)"/><stop offset=".6" stop-color="rgba(64,214,255,.07)"/><stop offset="1" stop-color="rgba(64,214,255,0)"/></radialGradient></defs>
-   <circle cx="200" cy="200" r="198" fill="url(#cg)"/>${ticks}
-   <circle cx="200" cy="200" r="178" stroke="var(--acc)" stroke-width="1" opacity=".3"/>${a}
-   <circle cx="200" cy="200" r="148" stroke="var(--acc)" stroke-width="1" stroke-dasharray="2 6" opacity=".6"/>${segIn}
-   <circle cx="200" cy="200" r="110" stroke="var(--acc)" stroke-width="1.5" opacity=".8"/>
-   <circle cx="200" cy="200" r="104" fill="rgba(3,8,15,.55)"/><circle cx="200" cy="200" r="104" stroke="var(--acc)" stroke-width="1" opacity=".3"/>${inner}</svg>`;
-}
-function bunny(w = 170) {
-  let scan = ''; for (let y = 40; y < 175; y += 7) scan += `<line x1="20" y1="${y}" x2="180" y2="${y}" stroke="var(--acc)" stroke-width=".6" opacity=".12"/>`;
-  return `<svg width="${w}" height="${w}" viewBox="0 0 200 200" fill="none" aria-hidden="true">
-  <defs><linearGradient id="bf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="rgba(64,214,255,.28)"/><stop offset="1" stop-color="rgba(64,214,255,.04)"/></linearGradient>
-  <linearGradient id="beam" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="rgba(64,214,255,.25)"/><stop offset="1" stop-color="rgba(64,214,255,0)"/></linearGradient></defs>
-  <path d="M40 176 L70 40 L130 40 L160 176 Z" fill="url(#beam)" opacity=".5"/>${scan}
-  <g stroke="var(--acc)" stroke-width="1.6" fill="url(#bf)" style="filter:drop-shadow(0 0 0.3125rem rgba(64,214,255,.7))">
-   <ellipse cx="86" cy="62" rx="11" ry="34" transform="rotate(-12 86 62)"/><ellipse cx="112" cy="60" rx="11" ry="34" transform="rotate(14 112 60)"/>
-   <ellipse cx="100" cy="138" rx="38" ry="34"/><circle cx="100" cy="100" r="28"/><ellipse cx="128" cy="150" rx="10" ry="9"/></g>
-  <ellipse cx="86" cy="62" rx="4" ry="20" transform="rotate(-12 86 62)" stroke="var(--acc)" opacity=".5"/><ellipse cx="112" cy="60" rx="4" ry="20" transform="rotate(14 112 60)" stroke="var(--acc)" opacity=".5"/>
-  <circle cx="90" cy="98" r="3" fill="#e2f6ff"/><circle cx="110" cy="98" r="3" fill="#e2f6ff"/><path d="M97 108 Q100 111 103 108" stroke="#e2f6ff" stroke-width="1.4"/>
-  <ellipse cx="100" cy="176" rx="62" ry="10" stroke="var(--acc)" stroke-width="1.4" opacity=".8"/><ellipse cx="100" cy="176" rx="44" ry="6" stroke="var(--acc)" stroke-width="1" opacity=".5"/>
-  <ellipse cx="100" cy="176" rx="80" ry="14" stroke="var(--acc)" stroke-width=".8" stroke-dasharray="3 5" opacity=".5"/></svg>`;
+    ticks += `<line x1="${Rn(x0)}" y1="${Rn(y0)}" x2="${Rn(x1)}" y2="${Rn(y1)}" stroke="var(--acc)" stroke-width="${long ? 1.6 : 1}" opacity="${long ? .8 : .35}"/>`; }
+  let segIn = ''; for (let i = 0; i < 10; i++) { const d = i * 36 + 4; segIn += `<path d="${arc(200, 200, 128, d, d + 28)}" stroke="var(--acc)" stroke-width="10" fill="none" opacity=".55"/>`; }
+  return `<svg viewBox="0 0 400 400" fill="none" aria-hidden="true"><circle cx="200" cy="200" r="198" fill="url(#cg)"/>
+   <defs><radialGradient id="cg" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="rgba(64,214,255,.25)"/><stop offset=".6" stop-color="rgba(64,214,255,.06)"/><stop offset="1" stop-color="rgba(64,214,255,0)"/></radialGradient></defs>${ticks}
+   <circle cx="200" cy="200" r="178" stroke="var(--acc)" stroke-width="1" opacity=".3"/><path d="${arc(200, 200, 168, -55, 55)}" stroke="var(--acc)" stroke-width="8" stroke-linecap="round" opacity=".8"/><path d="${arc(200, 200, 168, 65, 175)}" stroke="var(--acc)" stroke-width="8" stroke-linecap="round" opacity=".8"/><path d="${arc(200, 200, 168, 185, 295)}" stroke="var(--acc)" stroke-width="8" stroke-linecap="round" opacity=".8"/>
+   <circle cx="200" cy="200" r="148" stroke="var(--acc)" stroke-width="1" stroke-dasharray="2 6" opacity=".6"/>${segIn}<circle cx="200" cy="200" r="110" stroke="var(--acc)" stroke-width="1.5" opacity=".8"/></svg>`;
 }
 function miniRing(pct, st, center) {
   const col = st === 'ok' ? COL.ok : st === 'warn' ? COL.warn : st === 'bad' ? COL.bad : COL.acc;
   const C = 2 * Math.PI * 31, p = Math.max(0, Math.min(100, pct ?? 100));
   return `<div class="tring"><svg width="74" height="74" viewBox="0 0 74 74" aria-hidden="true"><circle cx="37" cy="37" r="31" stroke="rgba(64,214,255,.15)" stroke-width="6" fill="none"/>
-  <circle cx="37" cy="37" r="31" stroke="${col}" stroke-width="6" fill="none" stroke-dasharray="${R(C * p / 100)} ${R(C)}" stroke-linecap="round" transform="rotate(-90 37 37)" style="filter:drop-shadow(0 0 0.25rem ${col})"/></svg><span class="c">${center}</span></div>`;
+  <circle cx="37" cy="37" r="31" stroke="${col}" stroke-width="6" fill="none" stroke-dasharray="${Rn(C * p / 100)} ${Rn(C)}" stroke-linecap="round" transform="rotate(-90 37 37)"/></svg><span class="c">${center}</span></div>`;
 }
 
 // ---------- derived ----------
@@ -156,111 +130,175 @@ const agents = () => (state.status && Array.isArray(state.status.agents) ? state
 const tasks = () => (state.status && Array.isArray(state.status.tasks) ? state.status.tasks : []);
 const updates = () => (state.status && Array.isArray(state.status.updates) ? state.status.updates : []);
 const KIND = { 'Bot': 'Bot', 'Cloud': 'Cloud', 'VS Code': 'VS Code' };
-const ST = {
-  working: { dot: 'pulse', label: 'Working', badge: 'acc' },
-  idle: { dot: 'idle', label: 'Idle', badge: 'dim' },
-  needs_you: { dot: 'warn', label: 'Needs you', badge: 'warn' },
-  done: { dot: 'ok', label: 'Done', badge: 'ok' },
-};
+const ST = { working: { dot: 'pulse', label: 'Working', badge: 'acc' }, idle: { dot: 'idle', label: 'Idle', badge: 'dim' }, needs_you: { dot: 'warn', label: 'Needs you', badge: 'warn' }, done: { dot: 'ok', label: 'Done', badge: 'ok' } };
 const stOf = (a) => ST[a.status] || ST.idle;
-function counts() {
-  const a = agents();
-  return { total: a.length, working: a.filter((x) => x.status === 'working').length, need: a.filter((x) => x.status === 'needs_you').length };
-}
-function runState() {
-  const r = state.gh.run; if (!r) return 'pending';
-  if (r.status !== 'completed') return 'warn';
-  return r.conclusion === 'success' ? 'ok' : 'bad';
-}
-function systems() {
-  const issues = [];
-  if (state.calo.checkedAt && state.calo.online === false) issues.push('Calo is offline');
-  if (runState() === 'bad') issues.push('Last deploy failed');
-  if (state.statusErr) issues.push('Status file unavailable');
-  const caloSt = !state.calo.checkedAt ? 'pending' : state.calo.online ? 'ok' : 'bad';
-  const teamSt = !state.status ? (state.statusErr ? 'bad' : 'pending') : counts().need ? 'warn' : 'ok';
-  return { issues, arcs: [
-    { state: caloSt, title: 'Calo app: ' + (caloSt === 'ok' ? 'online' : caloSt) },
-    { state: runState() === 'warn' ? 'ok' : runState(), title: 'GitHub deploy' },
-    { state: teamSt, title: 'AI team' + (counts().need ? ': ' + counts().need + ' need you' : '') },
-  ] };
-}
+function counts() { const a = agents(); return { total: a.length, working: a.filter((x) => x.status === 'working').length, need: a.filter((x) => x.status === 'needs_you').length }; }
+function runState() { const r = state.gh.run; if (!r) return 'pending'; if (r.status !== 'completed') return 'warn'; return r.conclusion === 'success' ? 'ok' : 'bad'; }
 
-// ---------- panels ----------
-function agentCard(a, i) {
-  const s = stOf(a), need = a.status === 'needs_you';
+// ---------- tabs (the core's nodes) ----------
+const AREAS = [
+  { id: 'chat', label: 'Chat', angle: 90, primary: true, icon: 'chat' },
+  { id: 'team', label: 'AI Team', angle: 50, icon: 'users' },
+  { id: 'agents', label: 'Agents', sub: 'Cursor · Copilot', angle: 10, icon: 'cursor' },
+  { id: 'github', label: 'GitHub', angle: -30, icon: 'branch' },
+  { id: 'calo', label: 'Calo App', angle: -70, icon: 'rabbit' },
+  { id: 'tasks', label: 'Tasks', angle: -110, icon: 'check' },
+  { id: 'business', label: 'Business', sub: 'After launch', muted: true, angle: -150, icon: 'chart' },
+  { id: 'launch', label: 'Quick Launch', angle: 170, icon: 'grid' },
+  { id: 'settings', label: 'Settings', angle: 130, icon: 'gear' },
+];
+const AREA = Object.fromEntries(AREAS.map((a) => [a.id, a]));
+
+// ---------- prefs + screen order ----------
+const DEFAULT_ORDER = { left: 2, centre: 1, right: 3 };
+const prefs = () => Object.assign({ perf: 'auto', fps: false }, lsGet(LS.prefs) || {});
+function order() { const o = prefs().order || {}; return [o.left, o.centre, o.right].slice().sort().join() === '1,2,3' ? o : DEFAULT_ORDER; }
+const posOf = (n) => { const o = order(); return o.left === n ? 'left' : o.right === n ? 'right' : 'centre'; };
+const scrAt = (p) => order()[p];
+
+// ---------- who is open: heartbeats every 2 s over a BroadcastChannel (also kept in localStorage for new windows) ----------
+const chan = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('nova-screens') : { postMessage() {}, set onmessage(f) {} };
+const peers = {};
+const liveKey = (n) => 'nova.scr.' + n;
+function alive(n) {
+  if (n === SCR) return true;
+  const b = peers[n] || lsGet(liveKey(n));
+  return !!b && Date.now() - b.t < (b.h ? 75000 : 6500); // a minimised window beats slowly, so give it longer
+}
+const winCentre = () => ({ x: window.screenX + window.outerWidth / 2, y: window.screenY + window.outerHeight / 2 });
+let closing = false;
+function beat() {
+  if (closing) return;
+  const b = { t: Date.now(), h: document.hidden, w: innerWidth, hh: innerHeight };
+  lsSet(liveKey(SCR), b);
+  chan.postMessage({ t: 'beat', s: SCR, h: b.h, w: b.w, hh: b.hh, c: winCentre() });
+}
+let liveSig = '';
+function checkScreens() {
+  const sig = [1, 2, 3].map((n) => +alive(n)).join('');
+  if (sig !== liveSig) { liveSig = sig; if (unlocked()) { renderTiles(); updateUnread(); } redrawGrid(); }
+}
+setInterval(() => { beat(); checkScreens(); }, 2000);
+document.addEventListener('visibilitychange', () => { beat(); if (!document.hidden) markSeen(); });
+window.addEventListener('pagehide', () => { closing = true; chan.postMessage({ t: 'bye', s: SCR }); try { localStorage.removeItem(liveKey(SCR)); } catch (e) {} });
+window.addEventListener('pageshow', () => { closing = false; beat(); });
+
+// ---------- grid background (static 2D canvas; continuous across the three screens) ----------
+let gridSig = '';
+function centreAspect() {
+  const n = scrAt('centre'); if (n === SCR) return innerWidth / innerHeight;
+  const b = peers[n] || lsGet(liveKey(n)); return b && b.w && b.hh ? b.w / b.hh : 16 / 9;
+}
+function redrawGrid(force) {
+  const pos = posOf(SCR), ca = centreAspect(), minimal = root.getAttribute('data-n3d-mode') === 'minimal';
+  root.setAttribute('data-pos', pos);
+  const sig = [innerWidth, innerHeight, pos, ca.toFixed(3), minimal, window.devicePixelRatio].join();
+  if (!force && sig === gridSig) return; gridSig = sig;
+  drawGrid($('#grid'), { pos, centreAspect: ca, minimal });
+}
+// the scan band drifts down the floor every 14 s; every window uses the wall clock so the band lines up across screens
+const SCAN_S = 14;
+function syncScan() { const el = $('.scan'); if (el) el.style.animationDelay = (-(Date.now() % (SCAN_S * 1000)) / 1000).toFixed(2) + 's'; }
+let rzT = 0;
+window.addEventListener('resize', () => { clearTimeout(rzT); rzT = setTimeout(() => { redrawGrid(); beat(); layoutTiles(); }, 120); });
+
+// ---------- layout: which tabs are open, and on which screen ----------
+// { seq, tabs: [{ id, pos }] } in localStorage, announced over the BroadcastChannel. pos = left | centre | right.
+// A tab whose screen isn't open shows on screen 1 instead (and goes back when that screen opens again).
+let L = (() => { const x = lsGet(LS.layout); return x && Array.isArray(x.tabs) ? { seq: +x.seq || 0, tabs: x.tabs.filter((t) => AREA[t.id] && POS.includes(t.pos)) } : { seq: 0, tabs: [] }; })();
+function setLayout(tabs) {
+  L = { seq: Math.max(Date.now(), L.seq + 1), tabs };
+  lsSet(LS.layout, L); chan.postMessage({ t: 'layout', L });
+  renderTiles(); updateUnread();
+}
+function takeLayout(x) { if (!x || !Array.isArray(x.tabs) || !(x.seq > L.seq)) return; L = { seq: x.seq, tabs: x.tabs.filter((t) => AREA[t.id] && POS.includes(t.pos)) }; renderTiles(); updateUnread(); }
+const available = () => POS.filter((p) => alive(scrAt(p)));
+function effScreen(t) {
+  const s = scrAt(t.pos); if (alive(s)) return s;
+  if (alive(1)) return 1;
+  return [1, 2, 3].find(alive) || SCR;
+}
+const mine = () => { const m = L.tabs.filter((t) => effScreen(t) === SCR); return m.filter((t) => t.id === 'chat').concat(m.filter((t) => t.id !== 'chat')); };
+function defaultPos() { return alive(scrAt('centre')) ? 'centre' : posOf(SCR); }
+function openTab(id, pos) {
+  if (!AREA[id]) return;
+  const ex = L.tabs.find((t) => t.id === id);
+  if (ex && (!pos || ex.pos === pos)) { flashTab(id); chan.postMessage({ t: 'flash', id }); return; }
+  const tabs = L.tabs.filter((t) => t.id !== id); tabs.push({ id, pos: pos || defaultPos() });
+  setLayout(tabs);
+  if (id === 'agents' && !SEC) refreshCode();
+  setTimeout(() => { const el = tileEl(id); if (el) { el.classList.add('arrive'); setActive(id); } }, 0);
+}
+function sendTab(id, pos) {
+  if (!POS.includes(pos)) return;
+  if (!available().includes(pos)) { note(`<b>${POS_NAME[pos]} screen isn’t open</b><span class="mutedt">Open it with Set up screens on screen 1.</span>`); return; }
+  const t = L.tabs.find((x) => x.id === id); if (!t || t.pos === pos && effScreen(t) === scrAt(pos)) return;
+  const el = tileEl(id), from = POS.indexOf(posOf(SCR)), to = POS.indexOf(pos);
+  const go = () => setLayout(L.tabs.map((x) => (x.id === id ? { id, pos } : x)));
+  if (el && to !== from && !prefersReduced()) { el.classList.add(to < from ? 'throw-l' : 'throw-r'); setTimeout(go, 170); } else go();
+}
+function closeTab(id) { setLayout(L.tabs.filter((t) => t.id !== id)); }
+function clearScreens() { setLayout([]); closeMenu(); }
+const prefersReduced = () => window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// ---------- tab contents ----------
+function agentCard(a) {
+  const s = stOf(a), need = a.status === 'needs_you', u = safeUrl(a.link);
   const p = typeof a.progress === 'number' ? Math.max(0, Math.min(100, a.progress)) : null;
   const right = need ? '<span class="badge warn">Needs you</span>' : a.status === 'idle' ? '<span class="badge dim">Idle</span>' : a.status === 'done' ? '<span class="badge ok">Done</span>' : p != null ? `<span class="pct">${p}%</span>` : '<span class="badge acc">Working</span>';
   const bar = a.status === 'working' && p == null ? '<div class="bar indet"><i></i></div>' : `<div class="bar ${need ? 'warn' : a.status === 'done' ? 'ok' : ''}"><i style="width:${p ?? (a.status === 'done' ? 100 : 0)}%"></i></div>`;
-  return `<button class="agent ${need ? 'need' : ''}" data-agent="${i}"><span class="dot ${s.dot}"></span><div class="nm">${esc(a.name)}<small>${esc(KIND[a.kind] || a.kind || '')}</small></div>${right}
-   <div class="tk">${esc(a.task || (a.status === 'idle' ? 'Standing by' : ''))}</div>${bar}</button>`;
+  const inner = `<span class="dot ${s.dot}"></span><div class="nm">${esc(a.name)}<small>${esc(KIND[a.kind] || a.kind || '')}</small></div>${right}<div class="tk">${esc(a.task || (a.status === 'idle' ? 'Standing by' : ''))}</div>${bar}`;
+  return u ? `<a class="agent ${need ? 'need' : ''}" href="${esc(u)}" target="_blank" rel="noopener" title="${need ? 'Review' : 'Open'}">${inner}</a>` : `<div class="agent ${need ? 'need' : ''}">${inner}</div>`;
 }
-function updatedFoot() {
-  const u = state.status && state.status.updatedAt;
-  return `<div class="foot"><span data-updated>${u ? 'Updated ' + esc(ago(u)) : state.statusErr ? '<span class="badc">' + esc(state.statusErr) + '</span>' : 'Loading…'}</span><span>Encrypted feed</span></div>`;
+const kvs = (items) => `<div class="kv">${items.map(([k, v, cls = '']) => `<div><div class="label">${k}</div><div class="big ${cls}">${v}</div></div>`).join('')}</div>`;
+const wait = () => `<div class="empty">${state.statusErr ? esc(state.statusErr) : 'Decrypting…'}</div>`;
+function tabTeam() {
+  const a = agents(), c = counts(); if (!state.status) return wait();
+  const order = { needs_you: 0, working: 1, done: 2, idle: 3 };
+  const list = a.slice().sort((p, q) => (order[p.status] ?? 4) - (order[q.status] ?? 4)).map(agentCard).join('');
+  return kvs([['Working', c.working], ['Need you', c.need, c.need ? 'warnc' : ''], ['Agents', c.total]]) +
+    `<div class="alist">${list || '<div class="empty">No agents yet</div>'}</div><div class="tfoot">${state.status.updatedAt ? 'Updated ' + esc(ago(state.status.updatedAt)) + ' · ' : ''}Encrypted feed</div>`;
 }
-function teamPanel() {
-  const c = counts(), a = agents();
-  return `<section class="panel team">
-  <div class="ph"><h3>AI Team<small>${c.total} agents</small></h3><span class="meta"><span class="acc">${c.working} working</span>${c.need ? ` · <span class="warnc">${c.need} need${c.need === 1 ? 's' : ''} you</span>` : ''}</span></div>
-  <div class="alist scroll">${a.length ? a.map(agentCard).join('') : `<div class="empty">${state.statusErr ? esc(state.statusErr) : 'Decrypting team status…'}</div>`}</div>
-  ${updatedFoot()}</section>`;
-}
-function caloStats() {
-  const c = state.calo;
-  const badge = !c.checkedAt ? '<span class="badge dim">Checking…</span>' : c.online ? '<span class="badge ok">● Online</span>' : '<span class="badge bad">● Offline</span>';
-  return { badge, version: c.version || (c.online ? '—' : '—') };
-}
-function caloPanel() {
-  const c = state.calo, s = caloStats();
-  const up = updates().slice(0, 3);
-  return `<div class="panel calo">
-   <div class="bun"><div class="holo" data-holo-slot>${bunny(150)}</div><span class="label">Calo guide${n3d.webgl ? ' · drag' : ''}</span></div>
-   <div class="cstats">
-    <div class="ph" style="margin-bottom:0.75rem"><h3>${esc(c.name || 'Calo')} App</h3>${s.badge}</div>
-    <div class="kv"><div><div class="label">Version</div><div class="big">${esc(s.version)}</div></div>
-     <div title="No analytics connected yet"><div class="label">Installs</div><div class="big soonv">Coming soon</div></div>
-     <div title="No analytics connected yet"><div class="label">Active today</div><div class="big soonv">Coming soon</div></div></div>
-    <div class="mutedt sm phone-only">v${esc(s.version)} · ${c.checkedAt ? 'checked ' + esc(ago(c.checkedAt)) : 'checking'}</div>
-    <div class="mutedt livelink" style="font-size:0.8125rem;margin-top:0.875rem">Live at <a class="lnk" href="${CALO}" target="_blank" rel="noopener">tyler467890.github.io/student-day-planner</a>${c.checkedAt ? ` · checked <span data-ago="${c.checkedAt}">${esc(ago(c.checkedAt))}</span>` : ''}</div>
-   </div>
-   <div class="updates"><div class="label" style="margin-bottom:0.5rem">Recent updates</div>
-    ${up.length ? up.map((u) => `<div class="row"><span class="dot"></span><div class="grow"><b>${esc(u.title)}</b><div class="mutedt sm">${esc(dayLabel(u.time))}</div></div></div>`).join('') : '<div class="empty">No updates yet</div>'}
-   </div></div>`;
-}
-function ghPanel(full = false) { return `<div class="panel gh">${ghInner(full)}</div>`; }
 function ghTop() {
   const g = state.gh, r = g.run, rs = runState();
   const center = rs === 'ok' ? ic('check', 28, COL.ok, 2.4) : rs === 'bad' ? ic('alert', 26, COL.bad, 2) : rs === 'warn' ? ic('clock', 26, COL.warn, 2) : '<span class="mono dimt">…</span>';
   const runTitle = !r ? (g.error ? 'GitHub unavailable' : 'Loading…') : r.status !== 'completed' ? 'Deploying now…' : r.conclusion === 'success' ? 'Pages deploy live' : 'Deploy ' + esc(r.conclusion || 'failed');
-  return `<div class="ph"><h3>GitHub<small>student-day-planner</small></h3><a href="https://github.com/${REPO}" target="_blank" rel="noopener" title="Open repo on GitHub">${ic('branch', 20)}</a></div>
-   <a class="deploy hov" href="${esc(safeUrl(r && r.html_url) || 'https://github.com/' + REPO + '/actions')}" target="_blank" rel="noopener">
-    ${miniRing(100, rs === 'pending' ? 'acc' : rs, center)}
-    <div class="grow"><div class="label">Latest deploy${r ? ' · ' + esc(r.name || 'workflow') : ''}</div>
-     <div class="dtitle">${runTitle}</div>
+  return `<a class="deploy" href="${esc(safeUrl(r && r.html_url) || 'https://github.com/' + REPO + '/actions')}" target="_blank" rel="noopener">${miniRing(100, rs === 'pending' ? 'acc' : rs, center)}
+    <div class="grow"><div class="label">Latest deploy${r ? ' · ' + esc(r.name || 'workflow') : ''}</div><div class="dtitle">${runTitle}</div>
      <div class="mutedt sm">${r ? `<span data-ago="${esc(r.updated_at)}">${esc(ago(r.updated_at))}</span> · run #${esc(r.run_number)}` : '&nbsp;'}</div></div></a>`;
 }
-function ghInner(full = false) {
-  const g = state.gh, cm = g.commit, prs = g.prs || [];
-  const err = g.error ? `<div class="mutedt sm" style="margin-top:0.625rem">${ic('alert', 14, COL.warn)} ${esc(g.error)}</div>` : '';
+const prRow = (p) => `<a class="row" href="${esc(safeUrl(p.html_url))}" target="_blank" rel="noopener"><span class="num acc">#${esc(p.number)}</span><div class="grow"><b class="ell">${esc(p.title)}</b><div class="mutedt sm">Updated <span data-ago="${esc(p.updated_at)}">${esc(ago(p.updated_at))}</span></div></div>${p.draft ? '<span class="badge dim">Draft</span>' : '<span class="badge acc">Ready</span>'}</a>`;
+function tabGitHub() {
+  const g = state.gh, prs = g.prs || [], runs = g.runs || (g.run ? [g.run] : []), cms = g.commits || (g.commit ? [g.commit] : []);
+  const runRow = (r) => { const st = r.status !== 'completed' ? 'warn' : r.conclusion === 'success' ? 'ok' : 'bad';
+    return `<a class="row" href="${esc(safeUrl(r.html_url))}" target="_blank" rel="noopener"><span class="dot ${st}"></span><div class="grow"><b class="ell">${esc(r.name || 'workflow')} #${esc(r.run_number)}</b><div class="mutedt sm">${r.status !== 'completed' ? 'Running' : esc(r.conclusion || '')} · <span data-ago="${esc(r.updated_at)}">${esc(ago(r.updated_at))}</span></div></div></a>`; };
+  const cmRow = (c) => `<a class="row" href="${esc(safeUrl(c.html_url))}" target="_blank" rel="noopener">${ic('commit', 18, 'var(--acc)')}<div class="grow"><b class="ell">${esc(c.message)}</b><div class="mutedt sm"><span class="mono">${esc(c.sha)}</span> · ${esc(c.author || '')} · <span data-ago="${esc(c.date)}">${esc(ago(c.date))}</span></div></div></a>`;
   return `${ghTop()}
-   ${cm ? `<a class="row hov" style="border-top:1px solid rgba(64,214,255,.09);margin-top:0.875rem" href="${esc(safeUrl(cm.html_url))}" target="_blank" rel="noopener">${ic('commit', 18)}<div class="grow"><b class="ell" style="display:block">${esc(cm.message)}</b><div class="mutedt sm"><span class="mono">${esc(cm.sha)}</span> · ${esc(cm.author || '')} · <span data-ago="${esc(cm.date)}">${esc(ago(cm.date))}</span></div></div></a>` : ''}
-   <div class="label" style="margin:1rem 0 0.25rem">Open pull requests · ${g.prs ? prs.length : '…'}</div>
-   <div class="prs scroll" ${full ? 'style="max-height:none"' : ''}>
-    ${g.prs ? (prs.length ? prs.map(prRow).join('') : '<div class="empty">No open pull requests</div>') : '<div class="empty">Loading…</div>'}
-   </div>
-   ${err}
-   <div class="foot"><span>${g.fetchedAt ? 'Synced <span data-ago="' + g.fetchedAt + '">' + esc(ago(g.fetchedAt)) + '</span>' : ''}</span><span>Refreshes every 5 min</span></div>`;
+   <div class="label gl">Open pull requests · ${g.prs ? prs.length : '…'}</div>${g.prs ? (prs.length ? prs.map(prRow).join('') : '<div class="empty">No open pull requests</div>') : '<div class="empty">Loading…</div>'}
+   <div class="label gl">Deploys</div>${runs.length ? runs.slice(0, 3).map(runRow).join('') : '<div class="empty">No deploys yet</div>'}
+   <div class="label gl">Commits</div>${cms.length ? cms.slice(0, 5).map(cmRow).join('') : '<div class="empty">Loading…</div>'}
+   ${g.error ? `<div class="mutedt sm">${esc(g.error)}</div>` : ''}
+   <div class="tfoot"><a class="lnk" href="https://github.com/${REPO}" target="_blank" rel="noopener">${REPO}</a>${g.fetchedAt ? ' · synced <span data-ago="' + g.fetchedAt + '">' + esc(ago(g.fetchedAt)) + '</span>' : ''} · every 5 min</div>`;
 }
-const prRow = (p) => `<a class="row pr hov" href="${esc(safeUrl(p.html_url))}" target="_blank" rel="noopener"><span class="num acc">#${esc(p.number)}</span><div class="grow"><b class="ell" style="display:block">${esc(p.title)}</b><div class="mutedt sm">Updated <span data-ago="${esc(p.updated_at)}">${esc(ago(p.updated_at))}</span></div></div>${p.draft ? '<span class="badge dim">Draft</span>' : '<span class="badge acc">Ready</span>'}</a>`;
-function tasksPanel(limit) { return `<div class="panel tasks">${tasksInner(limit)}</div>`; }
-function tasksInner(limit) {
-  const t = tasks(), done = t.filter((x) => x.done).length;
-  const list = limit ? t.filter((x) => !x.done).slice(0, limit) : t;
-  return `<div class="ph"><h3>Today<small>Notion tasks</small></h3><span class="meta">${t.length ? `${done} of ${t.length} done` : ''}</span></div>
-   <div class="tl scroll">${t.length ? list.map((x) => { const u = safeUrl(x.link); const inner = `<span class="chk ${x.done ? 'done' : ''}"></span><span class="${x.done ? 'strike' : ''}">${esc(x.title)}</span>`;
-      return u ? `<a class="row hov" href="${esc(u)}" target="_blank" rel="noopener">${inner}</a>` : `<div class="row">${inner}</div>`; }).join('') : `<div class="empty">${state.statusErr ? esc(state.statusErr) : 'Decrypting tasks…'}</div>`}</div>
-   <a class="row addt desk-only" href="${NOTION_TASKS}" target="_blank" rel="noopener"><span class="acc" style="font-size:1.25rem;line-height:1">+</span><span class="mutedt">Open tasks in Notion</span></a>`;
+function tabCalo() {
+  const c = state.calo, up = updates().slice(0, 5);
+  const badge = !c.checkedAt ? '<span class="badge dim">Checking…</span>' : c.online ? '<span class="badge ok">● Online</span>' : '<span class="badge bad">● Offline</span>';
+  return `<div class="hrow"><b class="hname">${esc(c.name || 'Calo')} App</b>${badge}</div>
+   ${kvs([['Version', esc(c.version || '—')], ['Response', c.ms ? esc(c.ms) + ' ms' : '—'], ['Checked', c.checkedAt ? `<span data-ago="${c.checkedAt}">${esc(ago(c.checkedAt))}</span>` : '…']])}
+   <div class="mutedt sm" style="margin:.6rem 0">Live at <a class="lnk" href="${CALO}" target="_blank" rel="noopener">tyler467890.github.io/student-day-planner</a>${c.cache ? ' · build <span class="mono">' + esc(c.cache) + '</span>' : ''}</div>
+   <div class="label gl">Recent updates</div>${up.length ? up.map((u) => `<div class="row"><span class="dot"></span><div class="grow"><b class="ell">${esc(u.title)}</b><div class="mutedt sm">${esc(dayLabel(u.time))}</div></div></div>`).join('') : '<div class="empty">No updates yet</div>'}
+   <div class="btns"><a class="btn sm" href="${CALO}" target="_blank" rel="noopener">Open Calo ${ic('ext', 14)}</a><button class="btn sm" data-recheck>Check again</button></div>`;
+}
+function tabTasks() {
+  const t = tasks(); if (!state.status) return wait();
+  const done = t.filter((x) => x.done).length;
+  const rows = t.map((x) => { const u = safeUrl(x.link); const inner = `<span class="chk ${x.done ? 'done' : ''}"></span><span class="grow ${x.done ? 'strike' : ''}">${esc(x.title)}</span>`;
+    return u ? `<a class="row" href="${esc(u)}" target="_blank" rel="noopener">${inner}</a>` : `<div class="row">${inner}</div>`; }).join('');
+  return kvs([['Done', `${done} / ${t.length}`], ['Left', t.length - done]]) + `<div class="tl">${rows || '<div class="empty">No tasks yet</div>'}</div><div class="tfoot"><a class="lnk" href="${NOTION_TASKS}" target="_blank" rel="noopener">Open tasks in Notion</a></div>`;
+}
+function tabBusiness() {
+  return `<p class="mutedt" style="margin-bottom:.8rem">Sales, profit, ads and email fill in once Calo is on Etsy. Nothing is connected yet, so there are no numbers.</p>
+   <div class="bk">${[['Sales', 'Etsy orders and revenue', 'chart'], ['Profit', 'After fees and ads', 'chart'], ['Ads', 'Spend, clicks, sales', 'bolt'], ['Email', 'Support inbox', 'mail']].map(([k, sub, i]) => `<div class="bcell">${ic(i, 22, 'var(--acc)')}<div class="grow"><div class="label">${k}</div><div class="big dimt">—</div><div class="mutedt sm">${sub}</div></div><span class="soon">After launch</span></div>`).join('')}</div>`;
 }
 const TOOLS = [
   ['code', 'VS Code', 'https://vscode.dev', 'Open VS Code for the Web'],
@@ -268,130 +306,12 @@ const TOOLS = [
   ['cursor', 'Cursor', 'https://cursor.com/agents', 'Cursor agents'],
   ['branch', 'GitHub', 'https://github.com/' + REPO, 'Calo repository'],
   ['notes', 'Notion', 'https://app.notion.com', 'Notion'],
-  ['spark', 'Muse', '', 'Muse link not set yet (placeholder)'],
+  ['rabbit', 'Calo', CALO, 'The live Calo app'],
+  ['spark', 'Muse', '', 'Muse link not set yet'],
 ];
-function dock() { return `<div class="panel dock">${dockInner()}</div>`; }
-function dockInner() {
-  return `<div class="label vlabel">Quick launch</div>
-   ${TOOLS.map(([i, l, u, t]) => u ? `<a class="tool" href="${u}" target="_blank" rel="noopener" title="${esc(t)}">${hexIc(i)}<span>${l}</span></a>` : `<span class="tool ph-link" title="${esc(t)}">${hexIc(i)}<span>${l}</span><em class="tag">Soon</em></span>`).join('')}`;
+function tabLaunch() {
+  return `<div class="dock">${TOOLS.map(([i, l, u, t]) => u ? `<a class="tool" href="${u}" target="_blank" rel="noopener" title="${esc(t)}">${hexIc(i)}<span>${l}</span></a>` : `<span class="tool off" title="${esc(t)}">${hexIc(i)}<span>${l}</span><em class="tag">Soon</em></span>`).join('')}</div>`;
 }
-function futureCards() {
-  return [['Sales & Profit', 'chart', 'Etsy revenue · orders'], ['Ads', 'bolt', 'Spend · clicks · conversions'], ['Email', 'mail', 'Unread · top messages']].map(([t, i, s]) => `
-  <a class="panel fut" href="#business" title="Preview of how this looks after launch"><div class="future fx">${ic(i, 30)}<div><div class="ft">${t}</div><div class="mutedt sm">${s}</div></div></div>
-   <div class="fb"><span class="soon">Coming after launch</span><svg class="future spark" width="120" height="30" viewBox="0 0 120 30" fill="none" aria-hidden="true"><path d="M2 26 L20 20 L38 22 L56 14 L74 16 L92 8 L118 3" stroke="var(--acc)" stroke-width="1.5" stroke-dasharray="4 4"/></svg></div></a>`).join('');
-}
-function askBar(short) { return cmdBar(short) + repliesStrip(); }
-function needPanel() {
-  const n = agents().filter((a) => a.status === 'needs_you');
-  if (!n.length) return '';
-  return `<div class="panel needp" style="border-color:rgba(255,184,77,.45);background:rgba(255,184,77,.05)">
-   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.375rem"><span class="badge warn">${n.length} need${n.length === 1 ? 's' : ''} you</span><span class="mutedt" style="font-size:0.75rem">Tap to review</span></div>
-   ${n.map((a) => `<button class="row" style="width:100%;border:0;padding:0.3125rem 0;text-align:left" data-agent="${agents().indexOf(a)}"><span class="dot warn"></span><b style="font-family:var(--font-hd);font-size:1rem;white-space:nowrap">${esc(a.name)}</b><span class="mutedt ell" style="margin-left:auto;font-size:0.7812rem">${esc(a.task || '')}</span></button>`).join('')}
-  </div>`;
-}
-
-// ---------- screen 1 · Command (when NOVA runs on two or three screens) ----------
-const SCREEN_NAMES = { 1: 'Command', 2: 'Team', 3: 'Build & Business' };
-const SCREEN_SHORT = { 1: 'Command', 2: 'Team', 3: 'Build' };
-function roleName() { return ROLE === 'merged' ? 'Team · Build & Business' : ROLE === 'team' ? 'Team' : ROLE === 'build' ? 'Build & Business' : 'Command'; }
-function sysPill() {
-  const sys = systems();
-  return `<span class="pill ${sys.issues.length ? 'warn' : ''}" title="${esc(sys.issues.join(', ') || 'Calo online, deploy OK, team feed decrypted')}"><span class="dot ${sys.issues.length ? 'warn' : 'ok'}"></span>${sys.issues.length ? sys.issues.length + (sys.issues.length === 1 ? ' issue' : ' issues') : 'All systems normal'}</span>`;
-}
-function screenChips() {
-  const want = screensWanted();
-  return [1, 2, 3].map((n) => {
-    const on = alive(n), used = n <= want, me = n === SCR;
-    const tip = `Screen ${n} · ${SCREEN_NAMES[n]}${me ? ' (this window)' : on ? ' · open' : used ? ' · not open yet, click to open' : ' · not used'}`;
-    return `<button class="chip ${on ? 'on' : ''} ${used ? '' : 'unused'} ${me ? 'me' : ''}" ${!on && SCR === 1 ? `data-openscr="${n}"` : ''} title="${esc(tip)}"><b>${n}</b><span>${SCREEN_SHORT[n]}</span></button>`;
-  }).join('');
-}
-const srow = (dot, k, v, sub = '', cls = '') => `<div class="srow"><span class="dot ${dot}"></span><div class="grow"><div class="sk">${k}</div>${sub ? `<div class="ss">${sub}</div>` : ''}</div><div class="sv ${cls}">${v}</div></div>`;
-function statusPanel() {
-  const c = counts(), rs = runState(), r = state.gh.run, cl = state.calo, t = tasks(), done = t.filter((x) => x.done).length;
-  const want = screensWanted(), missing = [2, 3].filter((n) => n <= want && !alive(n));
-  const scr = missing.length ? `<div class="mutedt sm">Screen ${missing.join(' and ')} ${missing.length > 1 ? 'aren’t' : 'isn’t'} open yet.</div><button class="btn sm" data-setup>${ic('monitor', 16, 'currentColor')} Set up screens</button>`
-    : `<div class="mutedt sm">${want > 1 ? `All ${want} screens linked.` : 'One screen.'} <button class="lnkbtn" data-setup>Set up screens</button></div>`;
-  return `<section class="panel statp"><div class="ph"><h3>Status<small>overview</small></h3>${sysPill()}</div>
-   <div class="slist">
-    ${srow(!cl.checkedAt ? 'idle' : cl.online ? 'ok' : 'bad', 'Calo app', !cl.checkedAt ? '…' : cl.online ? 'Online' : 'Offline', cl.version ? 'v' + esc(cl.version) : '', cl.online ? 'okc' : cl.checkedAt ? 'badc' : '')}
-    ${srow(rs === 'ok' ? 'ok' : rs === 'bad' ? 'bad' : rs === 'warn' ? 'warn' : 'idle', 'Last deploy', rs === 'ok' ? 'Success' : rs === 'bad' ? 'Failed' : rs === 'warn' ? 'Running' : '…', r ? `<span data-ago="${esc(r.updated_at)}">${esc(ago(r.updated_at))}</span>` : '', rs === 'ok' ? 'okc' : rs === 'bad' ? 'badc' : '')}
-    ${srow(c.working ? 'pulse' : 'idle', 'AI team', state.status ? `${c.working} / ${c.total}` : '—', 'working')}
-    ${srow(c.need ? 'warn' : 'ok', 'Needs you', state.status ? String(c.need) : '—', c.need ? 'waiting' : 'all clear', c.need ? 'warnc' : '')}
-    ${srow('', 'Tasks today', state.status ? `${done} / ${t.length}` : '—', 'done')}
-    ${srow(conn.session ? 'ok' : 'idle', 'Secure service', conn.session ? 'Signed in' : conn.err ? 'Offline' : 'Connecting…', '', conn.session ? '' : 'dimt')}
-   </div>
-   <div class="scrbox"><div class="label">Screens</div>${scr}</div></section>`;
-}
-function needsPanel() {
-  const n = agents().map((a, i) => [a, i]).filter(([a]) => a.status === 'needs_you');
-  const body = !state.status ? `<div class="empty">${state.statusErr ? esc(state.statusErr) : 'Decrypting…'}</div>`
-    : n.length ? n.map(([a, i]) => { const u = safeUrl(a.link); return `<div class="approve"><div class="label warnc">● ${esc(a.name)} <span class="dimt">· ${esc(KIND[a.kind] || a.kind || 'agent')}</span></div><div class="aq">${esc(a.task || 'Waiting on you')}</div>
-       <div class="btns">${u ? `<a class="btn pri sm" href="${esc(u)}" target="_blank" rel="noopener">Review ${ic('ext', 14, '#1a1206')}</a>` : ''}<button class="btn sm" data-agent="${i}">${alive(2) ? 'Show on screen 2' : 'Details'}</button></div></div>`; }).join('')
-    : `<div class="allclear">${ic('check', 34, COL.ok, 2.2)}<div><b>Nothing is waiting on you</b><div class="mutedt sm">Approvals from your bots show up here.</div></div></div>`;
-  return `<section class="panel needc"><div class="ph"><h3>Needs you<small>approvals</small></h3><span class="meta ${n.length ? 'warnc' : ''}">${state.status ? n.length : ''}</span></div><div class="nlist scroll">${body}</div></section>`;
-}
-function replyRows(list) {
-  return list.map((r) => { const t = Date.parse(r.time); return `<div class="rrow"><span class="rt">${isNaN(t) ? '' : esc(ago(t))}</span><div class="rtx" title="${esc(r.text)}">${esc(r.text)}</div></div>`; }).join('');
-}
-function repliesPanel() {
-  const x = conn.inbox || [];
-  return `<section class="panel replp"><div class="ph"><h3>Replies<small>from your bots</small></h3>${x.length ? `<button class="lnkbtn" data-replies>All ${x.length}</button>` : ''}</div>
-   <div class="rlist scroll">${x.length ? replyRows(x.slice(0, 6)) : `<div class="empty">${conn.session || conn.status ? 'No replies yet. Ask your team with the bar under the core and answers land here.' : conn.err ? esc(conn.err) : 'Connecting to the secure service…'}</div>`}</div></section>`;
-}
-function viewCommand() {
-  const c = counts(), sys = systems();
-  const sub = sys.issues.length ? 'Heads up: ' + sys.issues.join(' · ') + '.' : c.need ? `${c.need === 1 ? 'One thing needs' : c.need + ' things need'} you. Everything else is on track.` : 'Everything is on track.';
-  return `<div class="cmdv">
-   ${statusPanel()}
-   <section class="center"><div class="core" data-n3d-container>
-    <div class="greet"><h1 class="glow"><span data-greet>${greeting()}</span>, Tyler</h1><p>${esc(sub)}</p></div>
-    <div class="ringwrap"><div class="ring" id="core-ring" data-n3d-core title="Drag to rotate · scroll or pinch to zoom · pick a node for details">${coreRing(sys.arcs)}${clock3d()}</div></div>
-    ${cmdBar(false)}
-   </div></section>
-   <section class="rcolc">${needsPanel()}${repliesPanel()}</section>
-  </div>`;
-}
-
-// ---------- screens 2 and 3 (Team · Build & Business) ----------
-function xAgents() {
-  const c = counts(), a = agents(), upd = state.status && state.status.updatedAt;
-  const list = a.map((x, i) => agentCard(x, i).replace('class="agent ', `class="agent ${i === state.selAgent ? 'sel ' : ''}`).replace(' data-agent=', ' data-select=')).join('');
-  return `<div class="ph"><h3>AI Team<small>live</small></h3><span class="meta"><span class="acc">${c.working} working</span>${c.need ? ` · <span class="warnc">${c.need} need${c.need === 1 ? 's' : ''} you</span>` : ''}</span></div>
-   <div class="alist scroll s2list">${list || `<div class="empty">${state.statusErr ? esc(state.statusErr) : 'Decrypting team status…'}</div>`}</div>
-   <div class="foot"><span data-updated>${upd ? 'Updated ' + esc(ago(upd)) : ''}</span><span>${a.length} agents</span></div>`;
-}
-function xDetail() {
-  const a = agents()[state.selAgent] || agents()[0];
-  const hint = '<span class="meta">Core picks open here</span>';
-  if (!a) return `<div class="ph"><h3>Agent</h3>${hint}</div><div class="empty">${state.statusErr ? esc(state.statusErr) : 'Decrypting team status…'}</div>`;
-  const s = stOf(a), p = typeof a.progress === 'number' ? Math.max(0, Math.min(100, a.progress)) : null, u = safeUrl(a.link), need = a.status === 'needs_you';
-  const ringSt = need ? 'warn' : a.status === 'done' ? 'ok' : 'acc';
-  const center = p != null ? `<span class="rpct">${p}%</span>` : need ? ic('alert', 24, COL.warn, 2) : a.status === 'done' ? ic('check', 24, COL.ok, 2.4) : ic(a.status === 'idle' ? 'clock' : 'bolt', 24, a.status === 'idle' ? COL.dim : COL.acc, 2);
-  const inbox = (conn.inbox || []).slice(0, 5);
-  return `<div class="ph"><h3>Agent<small>${esc(KIND[a.kind] || a.kind || '')}</small></h3>${hint}</div>
-   <div class="dhead">${miniRing(p ?? (a.status === 'idle' ? 0 : 100), ringSt, center)}
-    <div class="grow"><div class="dt ell">${esc(a.name)}</div><div class="mutedt dtask">${esc(a.task || 'Standing by')}</div>
-     <div class="dfacts"><span class="badge ${s.badge}">${s.label}</span>${u ? `<a class="btn sm ${need ? 'pri' : ''}" href="${esc(u)}" target="_blank" rel="noopener">${need ? 'Review now' : 'Open'} ${ic('ext', 14, need ? '#1a1206' : 'var(--acc)')}</a>` : ''}</div></div></div>
-   <div class="label dlbl">Latest replies${inbox.length ? ` <button class="lnkbtn" data-replies>All ${(conn.inbox || []).length}</button>` : ''}</div>
-   <div class="rlist scroll s2list">${inbox.length ? replyRows(inbox) : `<div class="empty">${conn.status ? 'No replies yet.' : alive(1) ? 'Waiting for screen 1…' : 'Open NOVA on screen 1 to see replies.'}</div>`}</div>
-   <div class="mutedt sm dnote">${ic('bolt', 14)} Send messages from the Ask bar on screen 1.</div>`;
-}
-function xLogs() {
-  const ev = [], g = state.gh;
-  (g.runs || (g.run ? [g.run] : [])).slice(0, 3).forEach((r) => { const st = r.status !== 'completed' ? 'warn' : r.conclusion === 'success' ? 'ok' : 'bad'; ev.push([r.updated_at, st, 'deploy', `${r.name || 'workflow'} #${r.run_number} · ${r.status !== 'completed' ? 'running' : r.conclusion}`]); });
-  (g.commits || (g.commit ? [g.commit] : [])).slice(0, 3).forEach((c) => ev.push([c.date, 'acc', 'commit', `${c.sha} ${c.message}`]));
-  (g.prs || []).slice(0, 4).forEach((p) => ev.push([p.updated_at, 'acc', 'pr', `#${p.number} ${p.title}${p.draft ? ' (draft)' : ''}`]));
-  updates().forEach((u) => ev.push([u.time, 'acc', 'update', u.title]));
-  (conn.inbox || []).slice(0, 3).forEach((x) => ev.push([x.time, 'ok', 'reply', x.text]));
-  ((conn.cursor && conn.cursor.items) || []).slice(0, 3).forEach((x) => ev.push([x.updatedAt, 'acc', 'cursor', `${x.name || 'Agent'} · ${String(x.status || '').toLowerCase()}`]));
-  if (state.calo.checkedAt) ev.push([state.calo.checkedAt, state.calo.online ? 'ok' : 'bad', 'uptime', `Calo ${state.calo.online ? 'online' : 'offline'}${state.calo.ms ? ' · ' + state.calo.ms + ' ms' : ''}`]);
-  const tms = (v) => { const t = typeof v === 'number' ? v : Date.parse(v && v.length === 10 ? v + 'T12:00:00-03:00' : v); return isNaN(t) ? 0 : t; };
-  ev.sort((x, y) => tms(y[0]) - tms(x[0]));
-  return `<div class="ph"><h3>Activity log<small>GitHub · Calo · team</small></h3><span class="meta">Halifax time</span></div>
-   <div class="scroll s2list">${ev.length ? ev.slice(0, 16).map(([t, k, kind, m]) => `<div class="lg"><span class="lt">${tms(t) ? esc(fYmd.format(new Date(tms(t))) === fYmd.format(new Date()) ? fTime.format(new Date(tms(t))) : fDay.format(new Date(tms(t)))) : ''}</span><span class="lk ${k}">${esc(kind)}</span><span class="lm" title="${esc(m)}">${esc(m)}</span></div>`).join('') : '<div class="empty">Loading…</div>'}</div>`;
-}
-// Cursor + Copilot lists come from nova-api through screen 1 (read-only GET routes)
 const CODE_ST = (v) => { const x = String(v || '').toLowerCase();
   if (/run|progress|creat|queue|pending|working|open/.test(x) && !/draft/.test(x)) return ['pulse', 'acc', x.includes('queue') || x.includes('pending') ? 'Queued' : 'Working'];
   if (/finish|complet|done|success|merged|closed/.test(x)) return ['ok', 'ok', 'Done'];
@@ -408,229 +328,257 @@ function codeRows(kind) {
   return items.slice(0, 12).map((x) => {
     const [dot, badge, label] = CODE_ST(kind === 'cursor' ? x.status : x.state), u = safeUrl(x.url), when = x.updatedAt || x.updated_at;
     const sub = [kind === 'cursor' ? '' : String(x.repo || '').split('/')[1] || '', when ? ago(when) : ''].filter(Boolean).map(esc).join(' · ');
-    const inner = `<span class="dot ${dot}"></span><div class="grow"><b class="ell" style="display:block">${esc(x.name || x.title || 'Untitled')}</b>${sub ? `<div class="mutedt sm">${sub}</div>` : ''}</div><span class="badge ${badge}">${esc(label)}</span>`;
-    return u ? `<a class="row hov" href="${esc(u)}" target="_blank" rel="noopener">${inner}</a>` : `<div class="row">${inner}</div>`;
+    const inner = `<span class="dot ${dot}"></span><div class="grow"><b class="ell">${esc(x.name || x.title || 'Untitled')}</b>${sub ? `<div class="mutedt sm">${sub}</div>` : ''}</div><span class="badge ${badge}">${esc(label)}</span>`;
+    return u ? `<a class="row" href="${esc(u)}" target="_blank" rel="noopener">${inner}</a>` : `<div class="row">${inner}</div>`;
   }).join('') + (d.err ? `<div class="mutedt sm">${esc(d.err)}</div>` : '');
 }
-function xCode() {
-  const cu = conn.cursor, at = Math.max((cu && cu.at) || 0, (conn.copilot && conn.copilot.at) || 0);
-  return `<div class="ph"><h3>Coding agents<small>read-only</small></h3><span class="meta">${at ? 'Synced <span data-ago="' + at + '">' + esc(ago(at)) + '</span>' : ''}</span></div>
-   <div class="cgrp"><div class="label glbl">Cursor${cu && cu.cap ? ` <span class="dimt">· ${esc(cu.used ?? 0)} of ${esc(cu.cap)} started today</span>` : ''}<a class="lnk" href="https://cursor.com/agents" target="_blank" rel="noopener">Open ${ic('ext', 12, 'currentColor')}</a></div><div class="scroll s2list">${codeRows('cursor')}</div></div>
-   <div class="cgrp"><div class="label glbl">GitHub Copilot<a class="lnk" href="https://github.com/copilot/agents" target="_blank" rel="noopener">Open ${ic('ext', 12, 'currentColor')}</a></div><div class="scroll s2list">${codeRows('copilot')}</div></div>`;
+function tabAgents() {
+  const cu = conn.cursor;
+  return `<div class="label gl first">Cursor${cu && cu.cap ? ` <span class="dimt">· ${esc(cu.used ?? 0)} of ${esc(cu.cap)} started today</span>` : ''}<a class="lnk" href="https://cursor.com/agents" target="_blank" rel="noopener">Open ${ic('ext', 12)}</a></div>${codeRows('cursor')}
+   <div class="label gl">GitHub Copilot<a class="lnk" href="https://github.com/copilot/agents" target="_blank" rel="noopener">Open ${ic('ext', 12)}</a></div>${codeRows('copilot')}
+   <div class="tfoot">Start a new Cursor or Copilot job from Chat: pick the target above the message box.</div>`;
 }
-function xGitHub() {
-  const g = state.gh, prs = g.prs || [], runs = g.runs || (g.run ? [g.run] : []), cms = g.commits || (g.commit ? [g.commit] : []);
-  const runRow = (r) => { const st = r.status !== 'completed' ? 'warn' : r.conclusion === 'success' ? 'ok' : 'bad';
-    return `<a class="row hov" href="${esc(safeUrl(r.html_url))}" target="_blank" rel="noopener"><span class="dot ${st}"></span><div class="grow"><b class="ell" style="display:block">${esc(r.name || 'workflow')} #${esc(r.run_number)}</b><div class="mutedt sm">${r.status !== 'completed' ? 'Running' : esc(r.conclusion || '')} · <span data-ago="${esc(r.updated_at)}">${esc(ago(r.updated_at))}</span></div></div></a>`; };
-  const cmRow = (c) => `<a class="row hov" href="${esc(safeUrl(c.html_url))}" target="_blank" rel="noopener">${ic('commit', 16)}<div class="grow"><b class="ell" style="display:block">${esc(c.message)}</b><div class="mutedt sm"><span class="mono">${esc(c.sha)}</span> · ${esc(c.author || '')} · <span data-ago="${esc(c.date)}">${esc(ago(c.date))}</span></div></div></a>`;
-  return `${ghTop()}
-   <div class="ghlists scroll s2list">
-    <div class="label gl">Open pull requests · ${g.prs ? prs.length : '…'}</div>${g.prs ? (prs.length ? prs.map(prRow).join('') : '<div class="empty">No open pull requests</div>') : '<div class="empty">Loading…</div>'}
-    <div class="label gl">Deploys</div>${runs.length ? runs.slice(0, 3).map(runRow).join('') : '<div class="empty">No deploys yet</div>'}
-    <div class="label gl">Commits</div>${cms.length ? cms.slice(0, 5).map(cmRow).join('') : '<div class="empty">Loading…</div>'}
-   </div>
-   ${g.error ? `<div class="mutedt sm">${ic('alert', 14, COL.warn)} ${esc(g.error)}</div>` : ''}
-   <div class="foot"><span>${g.fetchedAt ? 'Synced <span data-ago="' + g.fetchedAt + '">' + esc(ago(g.fetchedAt)) + '</span>' : ''}</span><span>Every 5 min</span></div>`;
-}
-function xCalo() {
-  const c = state.calo, s = caloStats(), up = updates().slice(0, 4);
-  return `<div class="ph"><h3>${esc(c.name || 'Calo')} App</h3>${s.badge}</div>
-   ${kvs([['Version', esc(s.version)], ['Response', c.ms ? esc(c.ms) + ' ms' : '—'], ['Checked', c.checkedAt ? `<span data-ago="${c.checkedAt}">${esc(ago(c.checkedAt))}</span>` : '…']])}
-   <div class="mutedt sm clink">Live at <a class="lnk" href="${CALO}" target="_blank" rel="noopener">tyler467890.github.io/student-day-planner</a></div>
-   <div class="cupd"><div class="label">Recent updates</div><div class="scroll s2list">${up.length ? up.map((u) => `<div class="row"><span class="dot"></span><div class="grow"><b class="ell" style="display:block;font-weight:600">${esc(u.title)}</b><div class="mutedt sm">${esc(dayLabel(u.time))}</div></div></div>`).join('') : '<div class="empty">No updates yet</div>'}</div></div>
-   <div class="btns"><a class="btn sm" href="${CALO}" target="_blank" rel="noopener">Open Calo ${ic('ext', 14)}</a><button class="btn sm" data-recheck>Check again</button></div>`;
-}
-function xBiz() {
-  return `<div class="ph"><h3>Business<small>after launch</small></h3><span class="soon">Coming after launch</span></div>
-   <div class="bk">${[['Sales', 'Etsy orders and revenue', 'chart'], ['Profit', 'After fees and ads', 'chart'], ['Ads', 'Spend, clicks, sales', 'bolt'], ['Email', 'Support inbox', 'mail']].map(([k, sub, i]) => `<div class="bcell future">${ic(i, 20)}<div class="grow"><div class="label">${k}</div><div class="big dimt">—</div><div class="mutedt sm">${sub}</div></div></div>`).join('')}</div>
-   <p class="mutedt sm bnote">Nothing is connected yet, so there are no numbers. These fill in once Calo is on Etsy.</p>`;
+const MODE_NAME = { smooth: 'Smooth', full: 'Full effects', minimal: 'Minimal' };
+function tabSettings() {
+  const p = prefs(), s = N3 ? N3.state : null, o = order(), auto = lsGet(LS.auto);
+  const opt = (name, val, cur, title, desc) => `<label class="opt ${String(cur) === val ? 'on' : ''}"><input type="radio" name="${name}-${SCR}" value="${val}" data-pref="${name}" ${String(cur) === val ? 'checked' : ''}><div><b>${title}</b><div class="mutedt sm">${desc}</div></div></label>`;
+  const now = SEC ? 'This screen draws only the grid (no 3D), so it costs almost nothing.' : !s ? 'The 3D core is off on this device.' : `Right now: ${MODE_NAME[s.mode]} · ${s.fps} fps drawn${s.busyFps ? ` · ${s.busyFps} fps while you move it` : ''} · resolution ${s.pixelRatio}x`;
+  const sel = (p2) => `<label class="osel"><span class="label">${POS_NAME[p2]}</span><select data-order="${p2}">${[1, 2, 3].map((n) => `<option value="${n}" ${o[p2] === n ? 'selected' : ''}>Screen ${n}${n === 1 ? ' (core)' : ''}${alive(n) ? '' : ' · closed'}</option>`).join('')}</select></label>`;
+  const off = conn.status && conn.status.controls_off;
+  return `<div class="sgroup"><div class="label">Performance</div>
+    ${opt('perf', 'auto', p.perf, 'Smooth (recommended)', 'Light glow, 1x resolution, full speed only while you move the core. Drops to Minimal by itself if your computer struggles.')}
+    ${opt('perf', 'full', p.perf, 'Full effects', 'Sharper and more particles, faster idle spin. Needs a strong graphics card.')}
+    ${opt('perf', 'minimal', p.perf, 'Minimal', 'A still core and no scan line. The lightest option.')}
+    <div class="mutedt sm" style="margin-top:.5rem" data-perfnow>${esc(now)}${p.perf === 'auto' && auto && auto.mode === 'minimal' ? ' · <button class="lnkbtn" data-perfretry>Try Smooth again</button>' : ''}</div></div>
+   <div class="sgroup"><div class="label">Screens</div>
+    <div class="mutedt sm">Which window sits on which monitor. The grid lines up across them and “send to” uses these names.</div>
+    <div class="orow">${sel('left')}${sel('centre')}${sel('right')}</div>
+    <div class="btns wrap">${SEC ? (canPlace() ? '<button class="btn sm" data-place>Place on monitor</button>' : '') : '<button class="btn sm" data-setup>Set up screens</button>'}<button class="btn sm" data-ident>Identify screens</button><button class="btn sm" data-fullscreen>${isFs() ? 'Exit full screen' : 'Full screen'}</button><button class="btn sm" data-clear>Clear screens</button></div></div>
+   <div class="sgroup"><div class="label">Connections</div><div class="clist">${connRows()}</div>
+    ${SEC ? '<div class="mutedt sm">Manage connections on screen 1.</div>' : `<div class="btns wrap"><button class="btn sm" data-conn>Manage connections</button>${conn.status ? `<span class="mutedt sm">Remote controls: ${off ? 'off' : 'on'}</span>` : ''}</div>`}</div>
+   <div class="sgroup"><div class="label">Lock</div><div class="btns wrap"><button class="btn sm danger" data-lock>${ic('lock', 15)} Lock NOVA on every screen</button></div>
+    <div class="mutedt sm">Forgets the passphrase on this computer.</div></div>
+   <div class="tfoot">NOVA ${VERSION} · screen ${SCR} · ${POS_NAME[posOf(SCR)]}</div>`;
 }
 
-// ---------- views ----------
-function viewOverview() {
-  const c = counts(), sys = systems(), cs = caloStats();
-  const sub = sys.issues.length ? 'Heads up: ' + sys.issues.join(' · ') + '.' : c.need ? `${c.need === 1 ? 'One thing needs' : c.need + ' things need'} you. Everything else is on track.` : 'Everything is on track.';
-  const r = state.gh.run, rs = runState();
-  const hs = (k, v, s, cls = '') => `<div class="hstat"><div class="label">${k}</div><div class="hv ${cls}">${v}</div><div class="hs">${s}</div></div>`;
-  return `<div class="ov">
-  ${teamPanel()}
-  <section class="center">
-   <div class="core" data-n3d-container>
-    <div class="greet"><h1 class="glow"><span data-greet>${greeting()}</span>, Tyler</h1><p>${esc(sub)}</p></div>
-    <div class="ringwrap">
-     <div class="side l">${hs('Agents', state.status ? `${c.working} / ${c.total}` : '—', 'working right now')}${hs('Needs you', state.status ? c.need : '—', 'waiting on you', c.need ? 'warnc' : '')}</div>
-     <div class="ring" id="core-ring" data-n3d-core title="Drag to rotate · scroll or pinch to zoom · pick a node for details">${coreRing(sys.arcs)}${clock3d()}</div>
-     <div class="side r">${hs('Calo app', !state.calo.checkedAt ? '…' : state.calo.online ? 'Online' : 'Offline', state.calo.online ? 'v' + esc(cs.version) + ' · live site' : 'live site', state.calo.online ? 'okc' : state.calo.checkedAt ? 'badc' : '')}
-      ${hs('Last deploy', rs === 'ok' ? 'Success' : rs === 'bad' ? 'Failed' : rs === 'warn' ? 'Running' : '…', r ? esc(ago(r.updated_at)) : 'GitHub Pages', rs === 'ok' ? 'okc' : rs === 'bad' ? 'badc' : '')}</div>
-     <div class="mini"><div><div class="label">Agents</div><b>${state.status ? `${c.working} / ${c.total}` : '—'}</b></div><div><div class="label">Calo</div><b class="${state.calo.online ? 'okc' : 'badc'}">${!state.calo.checkedAt ? '…' : state.calo.online ? 'Online' : 'Offline'}</b></div><div><div class="label">Deploy</div><b class="${rs === 'ok' ? 'okc' : ''}">${rs === 'ok' ? 'Live' : rs === 'bad' ? 'Failed' : rs === 'warn' ? 'Running' : '…'}</b></div></div>
-    </div>
-    ${askBar(false)}
-   </div>
-   ${needPanel()}
-   ${caloPanel()}
-  </section>
-  <section class="rightcol">${ghPanel()}${tasksPanel()}</section>
-  <section class="bottom">${dock()}${futureCards()}</section>
- </div>`;
+// ---------- Chat ----------
+const target = () => { const t = localStorage.getItem(LS.target); return TARGETS.some((x) => x.id === t) ? t : 'grok'; };
+const replyKey = (r) => (r.request_id || '') + '|' + r.time;
+const newGlow = new Map(); // reply key -> until (ms): bubbles that just arrived glow for a few seconds
+function seenAt() { return Date.parse(localStorage.getItem(LS.seen) || '') || 0; }
+function unreadCount() { const s = seenAt(); return (conn.inbox || []).filter((r) => Date.parse(r.time) > s).length; }
+function linkify(s) { return esc(s).replace(/https:\/\/[^\s<>"']+[^\s<>"'.,;:!?)]/g, (u) => `<a class="lnk" href="${u}" target="_blank" rel="noopener">${u}</a>`); }
+function chatLog() {
+  const sent = (lsGet(LS.sent) || []).map((x) => ({ me: true, ...x })), rep = (conn.inbox || []).map((x) => ({ me: false, ...x }));
+  const byId = new Map(sent.filter((x) => x.id).map((x) => [x.id, x])), answered = new Set(rep.map((r) => r.request_id).filter(Boolean));
+  const items = sent.concat(rep).sort((a, b) => (Date.parse(a.time) || 0) - (Date.parse(b.time) || 0));
+  if (!items.length) return `<div class="cempty">${ic('chat', 40, 'var(--acc)', 1.3)}<b>No messages yet</b><span>Pick Grok Bot, Cursor or Copilot below and type a message. Replies from your bots land here, newest at the bottom.</span></div>`;
+  const now = Date.now();
+  return items.map((m) => {
+    if (m.me) {
+      const t = TARGETS.find((x) => x.id === m.target) || TARGETS[0];
+      const st = m.target === 'grok' ? (m.id && answered.has(m.id) ? 'Answered' : 'Sent · waiting for a reply') : 'Started';
+      return `<div class="msg me"><div class="mh"><span class="src">You → ${esc(t.label)}</span><time>${esc(stamp(m.time))}</time></div><div class="mt">${linkify(m.text)}</div><div class="mst">${st}${m.link ? ` · <a class="lnk" href="${esc(safeUrl(m.link))}" target="_blank" rel="noopener">Open</a>` : ''}</div></div>`;
+    }
+    const k = replyKey(m), fresh = (newGlow.get(k) || 0) > now, re = m.request_id && byId.get(m.request_id);
+    const src = m.source || m.from || 'Grok Bot';
+    return `<div class="msg bot${fresh ? ' new' : ''}" data-k="${esc(k)}"><div class="mh"><span class="src">${ic('bolt', 14, 'var(--acc)')} ${esc(src)}</span><time>${esc(stamp(m.time))}</time></div>${re ? `<div class="mref">↳ ${esc(String(re.text).slice(0, 90))}${String(re.text).length > 90 ? '…' : ''}</div>` : ''}<div class="mt">${linkify(m.text)}</div></div>`;
+  }).join('');
 }
-function filteredAgents() {
-  return agents().map((a, i) => [a, i]).filter(([a]) => state.teamFilter === 'all' || (state.teamFilter === 'working' ? a.status === 'working' : a.status === 'needs_you'));
+function chatPick() {
+  const cur = target();
+  return TARGETS.map((t) => { const off = conn.status && !isOn(t.integ); return `<button type="button" role="radio" aria-checked="${t.id === cur}" class="tp ${t.id === cur ? 'on' : ''} ${off ? 'off' : ''}" data-target="${t.id}" title="${esc(t.hint)}${off ? ' (not connected)' : ''}">${esc(t.label)}${off ? ' <small>off</small>' : ''}</button>`; }).join('');
 }
-function agentDetail(a) {
-  if (!a) return `<div class="panel head"><div class="empty">${state.statusErr ? esc(state.statusErr) : 'Decrypting team status…'}</div></div>`;
-  const s = stOf(a), p = typeof a.progress === 'number' ? a.progress : null, u = safeUrl(a.link);
-  const ringSt = a.status === 'needs_you' ? 'warn' : a.status === 'done' ? 'ok' : 'acc';
-  const center = p != null ? `<span style="font-family:var(--font-dp);font-weight:600;font-size:1.0625rem">${p}%</span>` : a.status === 'needs_you' ? ic('alert', 26, COL.warn, 2) : a.status === 'done' ? ic('check', 26, COL.ok, 2.4) : ic(a.status === 'idle' ? 'clock' : 'bolt', 26, a.status === 'idle' ? COL.dim : COL.acc, 2);
-  return `<div class="panel head">
-   ${miniRing(p ?? (a.status === 'idle' ? 0 : 100), ringSt, center).replace('class="tring"', 'class="tring" style="width:6.875rem;height:6.875rem"').replace('width="74" height="74"', 'width="110" height="110"')}
-   <div class="grow"><div class="label">Agent · ${esc(KIND[a.kind] || a.kind || '')}</div>
-    <div class="title">${esc(a.name)}</div>
-    <div class="mutedt" style="font-size:1.0625rem;margin-top:0.25rem">${esc(a.task || 'Standing by')}</div>
-    ${u ? `<div class="btns"><a class="btn ${a.status === 'needs_you' ? 'pri' : ''}" href="${esc(u)}" target="_blank" rel="noopener">${a.status === 'needs_you' ? 'Review now' : 'Open'} ${ic('ext', 16, a.status === 'needs_you' ? '#1a1206' : 'var(--acc)')}</a></div>` : ''}
-   </div>
-   <div class="facts"><div><div class="label">Status</div><div class="fv ${a.status === 'needs_you' ? 'warnc' : a.status === 'done' ? 'okc' : ''}">${s.label}</div></div><div><div class="label">Kind</div><div class="fv">${esc(KIND[a.kind] || a.kind || '—')}</div></div><div><div class="label">Progress</div><div class="fv">${p != null ? p + '%' : '—'}</div></div></div>
-  </div>`;
+function chatNote() {
+  const t = TARGETS.find((x) => x.id === target());
+  if (SEC) return alive(1) ? `Sends through screen 1 after you confirm · replies refresh every 20 s` : 'Open NOVA on screen 1 to send messages and get replies';
+  if (!conn.session && !conn.status) return conn.err ? esc(conn.err) : 'Connecting to the secure service…';
+  if (conn.status && !isOn(t.integ)) return `${esc(t.label)} isn’t connected yet`;
+  return `Enter to review and send · Shift+Enter for a new line · replies refresh every 20 s${conn.inboxAt ? ` · checked <span data-ago="${conn.inboxAt}">${esc(ago(conn.inboxAt))}</span>` : ''}`;
 }
-function activityPanel(a) {
-  const ev = [];
-  if (a) ev.push([state.status && state.status.updatedAt ? fTime.format(new Date(state.status.updatedAt)) : '', a.status === 'needs_you' ? 'warn' : a.status === 'done' ? 'ok' : a.status === 'working' ? '' : 'idle', stOf(a).label + (a.task ? ': ' + a.task : ''), 'Latest status from the encrypted feed']);
-  return `<div class="panel tlp">
-   <div class="ph"><h3>Activity<small>latest status</small></h3><span class="meta" data-updated>${state.status ? 'Updated ' + esc(ago(state.status.updatedAt)) : ''}</span></div>
-   ${ev.map(([t, s, x, y]) => `<div class="ev"><span class="tt">${esc(t)}</span><span class="node"><span class="dot ${s}"></span></span><div><div class="ea">${esc(x)}</div><div class="eb">${esc(y)}</div></div></div>`).join('')}
-   <div class="nolog">${ic('clock', 22)}<div>A live step-by-step log isn’t connected yet. For now NOVA shows each agent’s latest status, task and link.</div></div>
-  </div>`;
+function buildChat(body) {
+  body.classList.add('chatbody');
+  body.innerHTML = `<div class="chatlog scroll" role="log" aria-live="polite" aria-label="Replies from your bots"></div>
+   <button type="button" class="jump" hidden>New reply ↓</button>
+   <form class="chatin" autocomplete="off">
+    <div class="tpick" role="radiogroup" aria-label="Send to"></div>
+    <div class="inrow"><textarea rows="2" maxlength="4000" aria-label="Message"></textarea><button class="csend" type="submit" aria-label="Review and send">${ic('send', 22)}<span>Send</span></button></div>
+    <div class="cnote"></div>
+   </form>`;
+  const ta = body.querySelector('textarea'); ta.value = localStorage.getItem(LS.draft) || '';
+  body.querySelector('.chatlog').addEventListener('scroll', (e) => { const lg = e.currentTarget; if (lg.scrollHeight - lg.scrollTop - lg.clientHeight < 40) body.querySelector('.jump').hidden = true; }, { passive: true });
+  body.querySelector('.jump').addEventListener('click', () => { const lg = body.querySelector('.chatlog'); lg.scrollTop = lg.scrollHeight; body.querySelector('.jump').hidden = true; });
+  ta.addEventListener('input', () => { clearTimeout(ta._t); ta._t = setTimeout(() => { localStorage.setItem(LS.draft, ta.value); chan.postMessage({ t: 'draft' }); }, 300); });
+  ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); chatSubmit(body); } });
+  body.querySelector('form').addEventListener('submit', (e) => { e.preventDefault(); chatSubmit(body); });
+  body.querySelector('.tpick').addEventListener('click', (e) => { const b = e.target.closest('[data-target]'); if (!b) return; localStorage.setItem(LS.target, b.dataset.target); chan.postMessage({ t: 'target' }); renderTiles(); ta.focus(); });
+  body._fresh = true;
 }
-function viewAgents() {
-  const a = agents(), sel = a[state.selAgent] || a[0], c = counts();
-  const list = filteredAgents();
-  const need = a.filter((x) => x.status === 'needs_you');
-  return `<div class="ag">
-   <div class="pteam"><div class="label">NOVA · Team</div><h1>Your AI team</h1></div>
-   <div class="filters" role="tablist">${[['all', 'All ' + c.total], ['working', 'Working ' + c.working], ['need', 'Needs you ' + c.need]].map(([k, l]) => `<button class="${state.teamFilter === k ? 'on' : ''} ${k === 'need' && c.need ? 'w' : ''}" data-filter="${k}">${l}</button>`).join('')}</div>
-   <aside class="panel side">
-    <div class="ph"><h3>AI Team</h3><span class="meta">${c.total}</span></div>
-    <div class="desk-only scroll" style="flex:1;min-height:0">${a.map((x, i) => `<button class="li ${x === sel ? 'sel' : ''}" data-select="${i}"><span class="dot ${stOf(x).dot}"></span><div class="grow"><div class="ln ell">${esc(x.name)}</div><div class="ls">${x.status === 'needs_you' ? '<span class="warnc">Needs you</span>' : x.status === 'working' ? (typeof x.progress === 'number' ? x.progress + '% · working' : 'Working') : stOf(x).label}</div></div></button>`).join('') || `<div class="empty">${state.statusErr ? esc(state.statusErr) : 'Decrypting…'}</div>`}</div>
-    <div class="alist phone-only">${list.map(([x, i]) => agentCard(x, i)).join('') || '<div class="empty">Nobody here right now</div>'}</div>
-    <div class="desk-only">${updatedFoot()}</div>
-   </aside>
-   <section class="mid">${agentDetail(sel)}${activityPanel(sel)}</section>
-   <section class="rcol">
-    <div class="panel"><div class="ph"><h3>Needs you</h3><span class="meta">${need.length}</span></div>
-     ${need.length ? need.map((x) => `<div class="approve"><div class="label warnc">● ${esc(x.name)}</div><div class="aq">${esc(x.task || 'Waiting on you')}</div><div class="am">${esc(KIND[x.kind] || '')} agent</div>${safeUrl(x.link) ? `<div class="btns"><a class="btn pri" href="${esc(safeUrl(x.link))}" target="_blank" rel="noopener">Review</a></div>` : ''}</div>`).join('') : '<div class="empty">Nothing is waiting on you.</div>'}
-    </div>
-    <div class="panel" style="flex:1;min-height:0"><div class="ph"><h3>Recent updates</h3></div>
-     ${updates().map((u) => `<div class="row"><span class="dot"></span><div class="grow"><b style="font-weight:600">${esc(u.title)}</b><div class="mutedt sm">${esc(dayLabel(u.time))}</div></div></div>`).join('') || '<div class="empty">No updates yet</div>'}
-     <div class="nolog" style="margin-top:1.125rem">${ic('users', 22)}<div>Send commands to Grok Bot, Cursor or Copilot from the Ask bar on the Overview. Replies show under it.</div></div>
-    </div>
-   </section>
-  </div>`;
+function fillChat(body) {
+  const lg = body.querySelector('.chatlog'), atBottom = body._fresh || lg.scrollHeight - lg.scrollTop - lg.clientHeight < 60;
+  const before = lg.__html; patch(lg, chatLog());
+  patch(body.querySelector('.tpick'), chatPick()); patch(body.querySelector('.cnote'), chatNote());
+  const t = TARGETS.find((x) => x.id === target()), ta = body.querySelector('textarea');
+  const ph = `Message ${t.label}…`; if (ta.placeholder !== ph) ta.placeholder = ph;
+  if (atBottom) lg.scrollTop = lg.scrollHeight; else if (before !== lg.__html) body.querySelector('.jump').hidden = false;
+  body._fresh = false;
 }
-function viewCalo() {
-  const c = state.calo, s = caloStats();
-  return `<div class="cv">
-   <div class="stack">
-    <div class="panel cbig">
-     <div class="bun"><div class="holo big" data-holo-slot>${bunny(220)}</div></div>
-     <div>
-      <div class="ph" style="margin-bottom:0.375rem"><h3 style="font-size:1.5rem">${esc(c.name || 'Calo')} App</h3>${s.badge}</div>
-      <div class="mutedt" style="font-size:0.9375rem">${esc(c.description || 'Live check of the public Calo site.')}</div>
-      <div class="facts2">
-       <div><div class="label">Version</div><div class="fv">${esc(s.version)}</div></div>
-       <div><div class="label">Cache build</div><div class="fv mono" style="font-size:1rem">${esc(c.cache || '—')}</div></div>
-       <div><div class="label">Response</div><div class="fv">${c.ms ? esc(c.ms) + ' ms' : '—'}</div></div>
-       <div title="No analytics connected yet"><div class="label">Installs</div><div class="fv dimt">Coming soon</div></div>
-       <div title="No analytics connected yet"><div class="label">Active users</div><div class="fv dimt">Coming soon</div></div>
-       <div><div class="label">Last check</div><div class="fv"><span data-ago="${c.checkedAt || ''}">${c.checkedAt ? esc(ago(c.checkedAt)) : '…'}</span></div></div>
-      </div>
-      <div class="btns"><a class="btn" href="${CALO}" target="_blank" rel="noopener">Open Calo ${ic('ext', 16)}</a><button class="btn" data-recheck>Check again</button></div>
-     </div>
-    </div>
-    <div class="panel"><div class="ph"><h3>Recent updates</h3></div>
-     ${updates().map((u) => `<div class="row"><span class="dot"></span><div class="grow"><b style="font-weight:600">${esc(u.title)}</b><div class="mutedt sm">${esc(dayLabel(u.time))}</div></div></div>`).join('') || '<div class="empty">No updates yet</div>'}
-    </div>
-   </div>
-   <div class="stack">${ghPanel(true)}</div>
-  </div>`;
+function chatSubmit(body) {
+  const ta = body.querySelector('textarea'), text = ta.value.trim(), tg = target();
+  if (!text) { ta.focus(); return; }
+  confirmCommand({ target: tg, text, send: SEC ? relaySend : sendDirect, onDone: (r) => {
+    const list = (lsGet(LS.sent) || []).concat({ id: r.request_id || null, text: text.slice(0, 4000), target: tg, time: new Date().toISOString(), link: r.link || '' }).slice(-60);
+    lsSet(LS.sent, list); ta.value = ''; localStorage.removeItem(LS.draft); chan.postMessage({ t: 'sent' }); renderTiles();
+  } });
 }
-function viewBusiness() {
-  const kpi = (k, sub) => `<div class="panel kpi"><div class="label">${k}</div><div class="big dimt">—</div><div class="mutedt sm">${sub}</div></div>`;
-  let grid = ''; for (let i = 0; i < 5; i++) grid += `<line x1="40" y1="${30 + i * 50}" x2="880" y2="${30 + i * 50}" stroke="rgba(64,214,255,.08)"/>`;
-  return `<div class="biz">
-   <div class="wm" aria-hidden="true"><span>PREVIEW</span></div>
-   <div class="bhead"><div><h1>Business</h1><div class="mutedt" style="margin-top:0.375rem">Calo on Etsy · nothing connected yet</div></div><span class="prevtag">Preview · how this looks after launch · no real data</span></div>
-   <div class="kpis">${kpi('Revenue', 'Etsy sales')}${kpi('Net profit', 'After fees and ads')}${kpi('Orders', 'This month')}${kpi('Ad spend', 'All campaigns')}${kpi('Return on ads', 'Revenue per $1')}</div>
-   <div class="brow">
-    <div class="panel"><div class="ph"><h3>Sales<small>Etsy revenue and orders</small></h3><span class="soon">Coming after launch</span></div>
-     <svg class="ghost" viewBox="0 0 900 240" width="100%" height="240" preserveAspectRatio="none" aria-hidden="true">${grid}
-      <path d="M40 220 C150 210 220 200 300 170 S470 150 560 120 S760 70 880 50" stroke="var(--acc)" stroke-width="2" stroke-dasharray="6 7" fill="none" opacity=".6"/></svg>
-     <div class="mutedt sm" style="text-align:center;margin-top:0.375rem">Example shape only. Real sales appear here once Etsy is connected.</div></div>
-    <div class="panel"><div class="ph"><h3>Where the money goes</h3></div>
-     <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap"><svg class="ghost" width="170" height="170" viewBox="0 0 170 170" aria-hidden="true"><circle cx="85" cy="85" r="62" fill="none" stroke="rgba(64,214,255,.25)" stroke-width="18" stroke-dasharray="6 6"/><text x="85" y="92" text-anchor="middle" font-family="Rajdhani" font-weight="700" font-size="26" fill="#4b6477">$ —</text></svg>
-      <div style="flex:1;min-width:9.375rem">${['Net profit', 'Ads', 'Etsy fees', 'Processing & tax'].map((l) => `<div class="row"><span class="grow mutedt">${l}</span><span class="dimt mono">—</span></div>`).join('')}</div></div></div>
-   </div>
-   <div class="brow3">
-    <div class="panel"><div class="ph"><h3>Ads</h3><span class="soon">After launch</span></div><table class="tbl"><tr><th>Campaign</th><th>Spend</th><th>Clicks</th><th>Sales</th></tr><tr><td>No campaigns yet</td><td>—</td><td>—</td><td>—</td></tr></table></div>
-    <div class="panel"><div class="ph"><h3>Inbox<small>support</small></h3><span class="soon">After launch</span></div><div class="empty">Support email will show here once it’s connected.</div></div>
-    <div class="panel"><div class="ph"><h3>Recent orders</h3><span class="soon">After launch</span></div><div class="empty">Etsy orders and unlock codes sent will show here.</div></div>
-   </div>
-  </div>`;
+// what's new since you last looked: the window showing Chat (and visible) marks replies as seen
+function markSeen() {
+  if (!unlocked() || document.hidden || !mine().some((t) => t.id === 'chat')) return;
+  const s = seenAt(), list = conn.inbox || [];
+  const newest = list.reduce((m, r) => Math.max(m, Date.parse(r.time) || 0), 0);
+  if (newest <= s) return;
+  const until = Date.now() + 8000;
+  if (s) list.forEach((r) => { if (Date.parse(r.time) > s) newGlow.set(replyKey(r), until); });
+  localStorage.setItem(LS.seen, new Date(newest).toISOString()); chan.postMessage({ t: 'seen' });
+  setTimeout(() => renderTiles(), 8100);
+  renderTiles(); updateUnread();
+}
+function updateUnread() {
+  const n = unlocked() ? unreadCount() : 0;
+  if (N3) N3.setUnread('chat', n);
+  const fb = $('#corenav [data-open="chat"] .nb'); if (fb) { fb.hidden = !n; fb.textContent = n > 9 ? '9+' : String(n); }
+  document.title = (n ? `(${n}) ` : '') + 'NOVA' + (SEC ? ` · ${POS_NAME[posOf(SCR)]}` : '');
+}
+let lastNewest = -1;
+function noticeReplies() { // a new reply arrived: glow the Chat node and the Chat panel wherever it is
+  const newest = (conn.inbox || []).reduce((m, r) => Math.max(m, Date.parse(r.time) || 0), 0);
+  if (lastNewest >= 0 && newest > lastNewest) { if (N3) N3.flash('chat'); pingTab('chat'); }
+  lastNewest = newest; markSeen(); updateUnread();
 }
 
-// ---------- shell ----------
-const VIEWS = [['overview', 'Overview', 'home', 'Home'], ['agents', 'Agents', 'users', 'Team'], ['calo', 'Calo', 'rabbit', 'Calo'], ['business', 'Business', 'chart', 'Business']];
-function renderTop() {
-  if (SEC) return;
-  const c = clockParts(), cmd = ROLE === 'command';
-  patch($('#topbar'), `<a class="brand" href="#overview">${brandMark()}<div class="name">NOVA</div><div class="sub">${cmd ? 'Screen 1 · Command' : 'Command Center'}</div></a>
-   ${cmd ? `<nav class="chips" aria-label="Screens">${screenChips()}</nav>` : `<nav class="nav">${VIEWS.map(([k, l]) => `<a href="#${k}" class="${state.view === k ? 'on' : ''}">${l}</a>`).join('')}</nav>`}
-   <div class="tright">${sysPill()}
-    <span class="clk" data-topclock>${esc(c.date.toUpperCase())} · ${esc(c.hm)} ${esc(c.ap)} ${esc(c.zone)}</span>${fpsTag()}
-    ${fsButton()}
-    <button class="lockbtn setupbtn" data-setup title="Set up screens: open NOVA's other screens on your other monitors">${ic('monitor', 15, 'currentColor')}<span class="lt">Set up screens</span></button>
-    <button class="lockbtn setbtn" data-settings title="Settings: performance, screens layout, glass effect">${ic('gear', 15, 'currentColor')}<span class="lt">Settings</span></button>
-    <button class="lockbtn connbtn" data-conn title="Connections: which tools are linked to NOVA">${ic('bolt', 15, 'currentColor')}<span class="lt">Connections</span></button>
-    <button class="lockbtn" data-lock title="Lock NOVA on every screen and forget the passphrase on this device">${ic('lock', 15, 'currentColor')}<span class="lt">Lock</span></button><div class="avatar" title="Tyler Fennell">TF</div></div>`);
-  patch($('#tabs'), VIEWS.map(([k, , i, l]) => `<a class="tab ${state.view === k ? 'on' : ''}" href="#${k}">${ic(i, 24, state.view === k ? 'var(--acc)' : 'var(--muted)')}<span>${l}</span></a>`).join(''));
+// ---------- tiles: the open tabs on this screen ----------
+// 1 tab = full, 2 = side by side, 3 = one big + two stacked, 4+ = grid. On screen 1 the core keeps a column on the left.
+const BODY = { team: tabTeam, agents: tabAgents, github: tabGitHub, calo: tabCalo, tasks: tabTasks, business: tabBusiness, launch: tabLaunch, settings: tabSettings };
+const tileEl = (id) => $(`#tiles > .tile[data-tab="${id}"]`);
+let activeTab = null;
+function setActive(id) { activeTab = id; document.querySelectorAll('#tiles > .tile').forEach((el) => el.classList.toggle('active', el.dataset.tab === id)); }
+function tileHead(id) {
+  const a = AREA[id], here = posOf(SCR), av = available();
+  const btn = (p) => `<button type="button" class="st ${p === here ? 'on' : ''}" data-sendto="${p}" ${p === here ? 'aria-pressed="true" disabled' : ''} title="${p === here ? 'On this screen' : 'Send to the ' + POS_NAME[p].toLowerCase() + ' screen'} (key ${POS.indexOf(p) + 1})">${p === 'left' ? '◀ ' : ''}${POS_NAME[p]}${p === 'right' ? ' ▶' : ''}</button>`;
+  return `<span class="tglyph">${ic(a.icon, 20, 'var(--acc)')}</span><h2>${esc(a.label)}${a.sub ? `<small>${esc(a.sub)}</small>` : ''}</h2>
+   ${av.length > 1 ? `<nav class="sendto" aria-label="Send ${esc(a.label)} to a screen">${POS.filter((p) => av.includes(p)).map(btn).join('')}</nav>` : ''}
+   <button type="button" class="tx" data-closetab title="Close ${esc(a.label)}" aria-label="Close ${esc(a.label)}">${ic('clear', 18, 'currentColor', 2)}</button>`;
 }
-// ---------- in-place DOM updates ----------
-// Data refreshes re-run the templates, then only the nodes that actually changed are touched, so panels,
-// their 3D tilt state, the hologram and the command bar (focus, caret, typed text) stay put.
-const baseCls = (el) => (el.getAttribute('class') || '').split(/\s+/).filter((c) => c && !c.startsWith('n3d-')).sort().join(' ');
-const isRuntime = (n) => n.nodeType === 1 && (n.classList.contains('n3d-fx') || n.classList.contains('holo-host'));
-function sameKind(a, b) {
-  if (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName) return false;
-  if (a.nodeType !== 1) return true;
-  if (a.__n3d || a.classList.contains('panel') || b.classList.contains('panel') || a.parentElement === $('#view')) return baseCls(a) === baseCls(b);
-  return a.id === b.id;
+function createTile(id) {
+  const el = document.createElement('section'); el.className = 'tile' + (id === 'chat' ? ' primary' : ''); el.dataset.tab = id;
+  el.setAttribute('aria-label', AREA[id].label); el.tabIndex = -1;
+  el.innerHTML = `<header class="thead" title="Drag off the left or right edge to throw it to that screen"></header><div class="tbody ${id === 'chat' ? '' : 'scroll'}"></div><i class="tc tl" aria-hidden="true"></i><i class="tc br" aria-hidden="true"></i>`;
+  if (id === 'chat') buildChat(el.querySelector('.tbody'));
+  el.addEventListener('pointerdown', () => setActive(id), true);
+  el.addEventListener('focusin', () => setActive(id));
+  el.addEventListener('animationend', () => el.classList.remove('arrive', 'ping', 'flash'));
+  return el;
 }
+function renderTiles() {
+  const box = $('#tiles'); if (!box) return;
+  if (!unlocked()) { box.replaceChildren(); root.classList.remove('has-tiles'); return; }
+  const list = mine(), ids = list.map((t) => t.id);
+  [...box.children].forEach((el) => { if (!ids.includes(el.dataset.tab)) el.remove(); });
+  list.forEach((t, i) => {
+    let el = tileEl(t.id);
+    if (!el) { el = createTile(t.id); box.appendChild(el); el.classList.add('arrive'); }
+    if (el.style.order !== String(i)) el.style.order = String(i);
+    patch(el.querySelector('.thead'), tileHead(t.id));
+    if (t.id === 'chat') fillChat(el.querySelector('.tbody')); else patch(el.querySelector('.tbody'), BODY[t.id]());
+  });
+  if (activeTab && !ids.includes(activeTab)) activeTab = null;
+  layoutTiles();
+  if (ids.includes('chat')) queueMicrotask(markSeen);
+}
+let tileSig = '';
+function layoutTiles() {
+  const box = $('#tiles'), n = box ? box.children.length : 0;
+  const had = root.classList.contains('has-tiles'); root.classList.toggle('has-tiles', n > 0);
+  if (!box) return;
+  const narrow = innerWidth < 760, w = box.clientWidth || innerWidth, h = box.clientHeight || innerHeight;
+  let cols = 1, rows = 1, span = false;
+  if (narrow) { cols = 1; rows = n; }
+  else if (n === 2) { if (w / h < 1.0) { rows = 2; } else cols = 2; }
+  else if (n === 3) { cols = 2; rows = 2; span = true; }
+  else if (n >= 4) { cols = n <= 4 ? 2 : 3; rows = Math.ceil(n / cols); }
+  const sig = [n, cols, rows, span, narrow].join();
+  if (sig !== tileSig) {
+    tileSig = sig; box.dataset.n = n;
+    box.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+    box.style.gridTemplateRows = narrow ? '' : `repeat(${rows}, minmax(0, 1fr))`;
+    [...box.children].forEach((el) => { el.style.gridRow = ''; });
+  }
+  const first = [...box.children].sort((a, b) => +a.style.order - +b.style.order)[0];
+  [...box.children].forEach((el) => { const want = span && el === first ? 'span 2' : ''; if (el.style.gridRow !== want) el.style.gridRow = want; });
+  if (N3 && had !== n > 0) N3.relayout(500);
+}
+function flashTab(id) { const el = tileEl(id); if (el) { el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); setActive(id); try { el.focus({ preventScroll: true }); } catch (e) {} } }
+function pingTab(id) { const el = tileEl(id); if (el) { el.classList.remove('ping'); void el.offsetWidth; el.classList.add('ping'); } chan.postMessage({ t: 'ping', id }); }
+
+// tile clicks: send to a screen, close
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('#tiles [data-sendto],#tiles [data-closetab]'); if (!t) return;
+  const id = t.closest('.tile').dataset.tab;
+  if (t.hasAttribute('data-closetab')) closeTab(id); else sendTab(id, t.getAttribute('data-sendto'));
+});
+// keyboard: 1 / 2 / 3 send the active tab to the left / centre / right screen
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey || !unlocked() || $('#modal .nmodal')) return;
+  if (e.target.closest && e.target.closest('input,textarea,select,[contenteditable]')) return;
+  const k = ['1', '2', '3'].indexOf(e.key); if (k < 0) return;
+  const list = mine(), id = activeTab && list.some((t) => t.id === activeTab) ? activeTab : list.length === 1 ? list[0].id : null;
+  if (!id) return;
+  e.preventDefault(); sendTab(id, POS[k]);
+});
+// drag a tile by its header off the left or right edge to throw it to the neighbouring screen
+(function dragThrow() {
+  let d = null;
+  const neighbour = (dir) => { const i = POS.indexOf(posOf(SCR)) + dir, p = POS[i]; return p && available().includes(p) ? p : null; };
+  const zone = (x) => (x < 70 ? neighbour(-1) && -1 : x > innerWidth - 70 ? neighbour(1) && 1 : 0) || 0;
+  const edges = (z) => { $('#edgeL').classList.toggle('on', z === -1); $('#edgeR').classList.toggle('on', z === 1); };
+  document.addEventListener('pointerdown', (e) => {
+    const h = e.target.closest('#tiles .thead'); if (!h || e.target.closest('button,a,select,input') || e.button !== 0 || innerWidth < 760) return;
+    const el = h.closest('.tile'); d = { el, id: el.dataset.tab, x0: e.clientX, y0: e.clientY, moved: false, pid: e.pointerId };
+    try { h.setPointerCapture(e.pointerId); } catch (_) {}
+    const l = neighbour(-1), r = neighbour(1);
+    $('#edgeL span').textContent = l ? `Send to ${POS_NAME[l].toLowerCase()} screen` : ''; $('#edgeR span').textContent = r ? `Send to ${POS_NAME[r].toLowerCase()} screen` : '';
+  });
+  document.addEventListener('pointermove', (e) => {
+    if (!d || e.pointerId !== d.pid) return;
+    const dx = e.clientX - d.x0, dy = e.clientY - d.y0;
+    if (!d.moved && Math.hypot(dx, dy) < 6) return;
+    if (!d.moved) { d.moved = true; d.el.classList.add('dragging'); root.classList.add('dragging-tile'); }
+    d.el.style.transform = `translate(${dx}px,${dy}px) scale(.97)`; edges(zone(e.clientX));
+  });
+  const end = (e) => {
+    if (!d || e.pointerId !== d.pid) return;
+    const z = d.moved ? zone(e.clientX) : 0, { el, id } = d; d = null; edges(0);
+    el.classList.remove('dragging'); root.classList.remove('dragging-tile'); el.style.transform = '';
+    if (z) sendTab(id, neighbour(z));
+  };
+  document.addEventListener('pointerup', end); document.addEventListener('pointercancel', end);
+})();
+
+// ---------- in-place DOM updates (keeps scroll position, focus and typed text) ----------
+function sameKind(a, b) { if (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName) return false; return a.nodeType !== 1 || a.id === b.id; }
 function morphAttrs(from, to) {
-  for (const a of [...from.attributes]) {
-    if (a.name === 'class' || a.name === 'style' || to.hasAttribute(a.name)) continue;
-    if (a.name.startsWith('aria-') || a.name === 'role' || a.name === 'tabindex') { if (from.classList.contains('n3d-holo-host')) continue; }
-    from.removeAttribute(a.name);
-  }
-  for (const a of [...to.attributes]) {
-    if (a.name === 'class') { const keep = [...from.classList].filter((c) => c.startsWith('n3d-')); const want = [a.value, ...keep].join(' ').trim(); if (from.getAttribute('class') !== want) from.setAttribute('class', want); continue; }
-    if (a.name === 'style') continue;
-    if (from.getAttribute(a.name) !== a.value) from.setAttribute(a.name, a.value);
-  }
-  if (!to.hasAttribute('class') && from.hasAttribute('class')) { const keep = [...from.classList].filter((c) => c.startsWith('n3d-')).join(' '); if (keep) from.setAttribute('class', keep); else from.removeAttribute('class'); }
-  // inline style from the template; the 3D layer owns transform/clip/opacity on panels
-  const ts = to.getAttribute('style') || '';
-  if (from.__n3d) { if (from.__tpl !== undefined && from.__tpl !== ts) { from.setAttribute('style', ts); from.__n3d.tf = null; } from.__tpl = ts; }
-  else if ((from.getAttribute('style') || '') !== ts) { if (ts) from.setAttribute('style', ts); else from.removeAttribute('style'); }
+  for (const a of [...from.attributes]) if (!to.hasAttribute(a.name)) from.removeAttribute(a.name);
+  for (const a of [...to.attributes]) if (from.getAttribute(a.name) !== a.value) from.setAttribute(a.name, a.value);
   if ((from.tagName === 'INPUT' || from.tagName === 'SELECT') && document.activeElement !== from) {
-    const v = from.tagName === 'SELECT' ? (to.querySelector('option[selected]') || to.querySelector('option') || {}).value : to.getAttribute('value') || '';
-    if (v != null && from.value !== v) from.value = v;
+    if (from.type === 'radio' || from.type === 'checkbox') from.checked = to.hasAttribute('checked');
+    else { const v = from.tagName === 'SELECT' ? (to.querySelector('option[selected]') || to.querySelector('option') || {}).value : to.getAttribute('value') || ''; if (v != null && from.value !== v) from.value = v; }
   }
 }
 function morphKids(from, toParent) {
-  if (from.hasAttribute && from.hasAttribute('data-holo-slot') && from.querySelector('.holo-host')) return; // live hologram lives here
-  const live = [...from.childNodes].filter((n) => !isRuntime(n)), next = [...toParent.childNodes];
-  const anchor = [...from.childNodes].find(isRuntime) || null;
+  const live = [...from.childNodes], next = [...toParent.childNodes];
   next.forEach((n, i) => {
     const cur = live[i];
-    if (!cur) { from.insertBefore(n, anchor); return; }
+    if (!cur) { from.appendChild(n); return; }
     if (!sameKind(cur, n)) { from.replaceChild(n, cur); return; }
     if (cur.nodeType === 3 || cur.nodeType === 8) { if (cur.nodeValue !== n.nodeValue) cur.nodeValue = n.nodeValue; return; }
     morphAttrs(cur, n); morphKids(cur, n);
@@ -638,76 +586,16 @@ function morphKids(from, toParent) {
   for (let i = next.length; i < live.length; i++) live[i].remove();
 }
 const tpl = document.createElement('template');
-function patch(el, html) {
-  if (!el) return;
-  if (el.__html === html) return; // nothing changed at all
-  el.__html = html; tpl.innerHTML = html; morphKids(el, tpl.content);
-}
-function render() {
-  applyRole();
-  const v = state.view;
-  if (!SEC) {
-    renderTop();
-    patch($('#view'), ROLE === 'command' ? viewCommand() : v === 'agents' ? viewAgents() : v === 'calo' ? viewCalo() : v === 'business' ? viewBusiness() : viewOverview());
-    document.title = 'NOVA · ' + (ROLE === 'command' ? 'Command' : (VIEWS.find((x) => x[0] === v) || VIEWS[0])[1]);
-  } else document.title = `NOVA · Screen ${SCR} · ${roleName()}`;
-  renderSec(); after3D();
-  emit('render', { view: v, role: ROLE });
-  relay();
-}
+function patch(el, html) { if (!el || el.__html === html) return; el.__html = html; tpl.innerHTML = html; morphKids(el, tpl.content); }
 function tick() {
   const c = clockParts();
-  document.querySelectorAll('[data-clock]').forEach((e) => { e.textContent = c.hm; });
-  document.querySelectorAll('[data-ampm]').forEach((e) => { e.textContent = `${c.ap} · ${c.zone}`; });
-  document.querySelectorAll('[data-greet]').forEach((e) => { e.textContent = greeting(); });
-  const tc = $('[data-topclock]'); if (tc) tc.textContent = `${c.date.toUpperCase()} · ${c.hm} ${c.ap} ${c.zone}`;
+  document.querySelectorAll('[data-clock]').forEach((e) => { if (e.textContent !== c.hm) e.textContent = c.hm; });
+  document.querySelectorAll('[data-ampm]').forEach((e) => { const v = `${c.ap} · ${c.zone}`; if (e.textContent !== v) e.textContent = v; });
 }
-function tickAgo() {
-  document.querySelectorAll('[data-ago]').forEach((e) => { const v = e.getAttribute('data-ago'); if (v) e.textContent = ago(/^\d+$/.test(v) ? +v : v); });
-  document.querySelectorAll('[data-updated]').forEach((e) => { if (state.status) e.textContent = 'Updated ' + ago(state.status.updatedAt); });
-}
-function route() {
-  const h = (location.hash || '#overview').slice(1).split('/');
-  state.view = VIEWS.some((v) => v[0] === h[0]) ? h[0] : 'overview';
-  if (h[0] === 'agents' && h[1] != null && !isNaN(+h[1])) state.selAgent = +h[1];
-  render(); window.scrollTo(0, 0);
-}
-// one selected agent across every screen
-function selectAgent(i) { if (state.selAgent !== i) { state.selAgent = i; chan.postMessage({ t: 'sel', i }); } render(); }
-function openAgent(i) {
-  if (SEC) { selectAgent(i); return; }
-  if (ROLE === 'command') {
-    selectAgent(i);
-    const a = agents()[i];
-    if (alive(2)) toast(`<div><b>${esc(a ? a.name : 'Agent')}</b> <span class="mutedt">is open on screen 2.</span></div>`, 4000, 'sel'); else openAgentModal(i);
-    return;
-  }
-  if (matchMedia('(max-width:760px)').matches) openSheet(i); else { state.selAgent = i; location.hash = '#agents/' + i; }
-}
-function openAgentModal(i) {
-  const a = agents()[i]; if (!a) return;
-  document.getElementById('modal') || document.body.insertAdjacentHTML('beforeend', '<div id="modal"></div>');
-  $('#modal').innerHTML = `<div class="nmodal" data-mclose><div class="mbox amodal" role="dialog" aria-modal="true" aria-label="${esc(a.name)}">${agentDetail(a)}<div class="btns"><button class="btn" data-mclose>Close</button></div></div></div>`;
-}
-function openSheet(i) {
-  const a = agents()[i]; if (!a) return;
-  $('#sheet').innerHTML = `<div class="sheet" data-close><div class="panel">${agentDetail(a)}<div class="btns" style="margin-top:1rem"><button class="btn" data-close>Close</button></div></div></div>`;
-}
+function tickAgo() { document.querySelectorAll('[data-ago]').forEach((e) => { const v = e.getAttribute('data-ago'); if (v) e.textContent = ago(/^\d+$/.test(v) ? +v : v); }); }
+function render() { if (!unlocked()) return; renderTiles(); updateUnread(); sync3D(); relay(); }
 
-document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-agent],[data-select],[data-filter],[data-lock],[data-ask],[data-recheck],[data-close]');
-  screenClicks(e);
-  if (!t) return;
-  if (t.hasAttribute('data-close')) { if (e.target === t || e.target.closest('button[data-close]')) $('#sheet').innerHTML = ''; return; }
-  if (t.hasAttribute('data-agent')) openAgent(+t.getAttribute('data-agent')); else if (t.hasAttribute('data-select')) selectAgent(+t.getAttribute('data-select'));
-  else if (t.hasAttribute('data-filter')) { state.teamFilter = t.getAttribute('data-filter'); render(); }
-  else if (t.hasAttribute('data-lock')) lock();
-  else if (t.hasAttribute('data-ask')) { t.classList.add('show'); clearTimeout(t._tm); t._tm = setTimeout(() => t.classList.remove('show'), 2200); }
-  else if (t.hasAttribute('data-recheck')) { if (SEC && alive(1)) chan.postMessage({ t: 'recheck' }); else checkCalo(true); }
-});
-window.addEventListener('hashchange', route);
-
-// ---------- crypto ----------
+// ---------- crypto (encrypted status feed) ----------
 const b64d = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 const keyCache = new Map();
 const normPass = (p) => String(p || '').trim().toLowerCase().replace(/\s+/g, '-');
@@ -733,31 +621,24 @@ async function fetchStatus(pass) {
 }
 async function refreshStatus() {
   const pass = localStorage.getItem(LS.pass); if (!pass) return;
-  try { state.status = await fetchStatus(pass); state.statusErr = ''; state.statusLoadedAt = Date.now(); emit('data', { source: 'status' }); }
+  try { state.status = await fetchStatus(pass); state.statusErr = ''; state.statusLoadedAt = Date.now(); }
   catch (e) {
     if (e instanceof WrongPass) { lock('The passphrase changed. Enter the new one.'); return; }
     state.statusErr = navigator.onLine === false ? 'Offline: status not refreshed' : 'Couldn’t load the status file';
-    console.warn('NOVA status:', e.message);
+    console.info('NOVA status:', e.message);
   }
   render();
 }
 
 // ---------- GitHub (public API, no token) ----------
 async function ghGet(path) {
-  const cache = state.gh.cache || (state.gh.cache = {});
-  const c = cache[path];
-  const headers = { Accept: 'application/vnd.github+json' };
+  const cache = state.gh.cache || (state.gh.cache = {}), c = cache[path], headers = { Accept: 'application/vnd.github+json' };
   if (c && c.etag) headers['If-None-Match'] = c.etag; // 304s don't count against the rate limit
   const r = await fetch('https://api.github.com/repos/' + REPO + path, { headers, cache: 'no-store' });
   if (r.status === 304 && c) return c.data;
-  if (r.status === 403 || r.status === 429) {
-    const reset = +r.headers.get('x-ratelimit-reset') * 1000 || Date.now() + 15 * 60 * 1000;
-    const e = new Error('rate'); e.reset = reset; throw e;
-  }
+  if (r.status === 403 || r.status === 429) { const e = new Error('rate'); e.reset = +r.headers.get('x-ratelimit-reset') * 1000 || Date.now() + 15 * 60 * 1000; throw e; }
   if (!r.ok) throw new Error('GitHub ' + r.status);
-  const data = await r.json();
-  cache[path] = { etag: r.headers.get('etag'), data };
-  return data;
+  const data = await r.json(); cache[path] = { etag: r.headers.get('etag'), data }; return data;
 }
 async function refreshGitHub(force) {
   const g = state.gh, now = Date.now();
@@ -769,16 +650,15 @@ async function refreshGitHub(force) {
     g.runs = (runs.workflow_runs || []).slice(0, 5).map((run) => ({ name: run.name, status: run.status, conclusion: run.conclusion, updated_at: run.updated_at, html_url: run.html_url, run_number: run.run_number }));
     g.run = g.runs[0] || null;
     g.commits = (Array.isArray(commits) ? commits : []).slice(0, 6).map((cm) => ({ sha: cm.sha.slice(0, 7), message: (cm.commit.message || '').split('\n')[0], author: (cm.author && cm.author.login) || cm.commit.author.name, date: cm.commit.author.date, html_url: cm.html_url }));
-    g.commit = g.commits[0] || null;
-    g.fetchedAt = now; g.error = ''; g.rateResetAt = 0;
+    g.commit = g.commits[0] || null; g.fetchedAt = now; g.error = ''; g.rateResetAt = 0;
   } catch (e) {
     if (e.reset) { g.rateResetAt = e.reset; g.error = 'GitHub rate limit reached, showing saved data. Retrying at ' + fTime.format(new Date(e.reset)) + '.'; }
     else g.error = g.fetchedAt ? 'GitHub unreachable, showing saved data.' : 'GitHub unreachable right now.';
   }
-  lsSet(LS.gh, g); emit('data', { source: 'github' }); render();
+  lsSet(LS.gh, g); render();
 }
 
-// ---------- Calo live check (same origin) ----------
+// ---------- Calo live check ----------
 async function getText(path) { const r = await fetch(CALO + path + (path.includes('?') ? '&' : '?') + 't=' + Date.now(), { cache: 'no-store' }); if (!r.ok) throw new Error(path + ' ' + r.status); return r.text(); }
 async function checkCalo(force) {
   const c = state.calo;
@@ -786,265 +666,32 @@ async function checkCalo(force) {
   const t0 = performance.now();
   const [m, sw, cfg] = await Promise.allSettled([getText('manifest.webmanifest'), getText('sw.js'), getText('js/config.js')]);
   const next = { checkedAt: Date.now(), online: false };
-  if (m.status === 'fulfilled') {
-    try { const j = JSON.parse(m.value); next.online = true; next.name = j.short_name || j.name; next.description = j.description; } catch {}
-    next.ms = Math.round(performance.now() - t0);
-  }
+  if (m.status === 'fulfilled') { try { const j = JSON.parse(m.value); next.online = true; next.name = j.short_name || j.name; next.description = j.description; } catch {} next.ms = Math.round(performance.now() - t0); }
   if (sw.status === 'fulfilled') { const x = sw.value.match(/const\s+CACHE\s*=\s*['"`]([^'"`]+)['"`]/); if (x) next.cache = x[1]; }
   if (cfg.status === 'fulfilled') { const x = cfg.value.match(/APP_VERSION\s*=\s*['"`]([^'"`]+)['"`]/); if (x) next.version = x[1]; }
-  if (next.online) next.lastOnlineAt = next.checkedAt; else next.lastOnlineAt = c.lastOnlineAt;
-  state.calo = next; lsSet(LS.calo, next); emit('data', { source: 'calo' }); render();
+  state.calo = next; lsSet(LS.calo, next); render();
 }
 
-// ---------- 3D layer (3d/nova-3d.min.js) ----------
-const N3 = window.NOVA3D || null;
-const SCR = +document.documentElement.getAttribute('data-n3d-screen') || 1; // 1 Command · 2 Team · 3 Build & Business
-const SEC = SCR !== 1;                    // a secondary window (screen 2 or 3): no 3D core, no nova-api sign-in
-let ROLE = document.documentElement.getAttribute('data-role') || 'all'; // all | command | team | build | merged
-const BUNNY = '3d/assets/calo-bunny.glb';
-const n3d = { shown: false, webgl: false, booted: false, holo: null, agentsKey: '', runKey: '' };
-function clock3d() {
-  const c = clockParts();
-  return `<div class="clock3d" aria-hidden="true"><b data-clock>${c.hm}</b><span data-ampm>${c.ap} · ${c.zone}</span><small>Halifax</small></div>`;
+// ---------- Cursor agents and Copilot tasks (screen 1 only, read-only GET routes on nova-api) ----------
+async function refreshCode() {
+  if (SEC || !conn.session || !conn.status || !L.tabs.some((t) => t.id === 'agents')) return;
+  const at = Date.now(), why = (e) => e.status === 503 ? 'Not connected yet.' : e.status === 429 ? 'Busy, trying again soon.' : e.status === 401 ? 'Not signed in to the secure service.' : 'Couldn’t load right now.';
+  const keep = (k) => (conn[k] && conn[k].items) || [], str = (v, n = 200) => String(v ?? '').slice(0, n), jobs = [];
+  if (isOn('cursor')) jobs.push(api('/cursor/agents').then((d) => { conn.cursor = { at, used: d.used_today, cap: d.cap, items: (d.agents || []).slice(0, 20).map((a) => ({ name: str(a.name), status: str(a.status, 40), url: str(a.url, 500), updatedAt: str(a.updatedAt, 40) })) }; }, (e) => { conn.cursor = { at, items: keep('cursor'), err: why(e) }; }));
+  else conn.cursor = null;
+  if (isOn('copilot') || isOn('github')) jobs.push(api('/github/copilot-tasks').then((d) => { conn.copilot = { at, source: d.source, items: (d.tasks || []).slice(0, 20).map((t) => ({ title: str(t.title), state: str(t.state, 40), repo: str(t.repo, 100), url: str(t.url, 500), updated_at: str(t.updated_at, 40) })) }; }, (e) => { conn.copilot = { at, items: keep('copilot'), err: why(e) }; }));
+  else conn.copilot = null;
+  await Promise.all(jobs); render();
 }
-function sync3D() {
-  if (!N3) return;
-  const a = agents(), working = a.filter((x) => x.status === 'working').length, need = a.some((x) => x.status === 'needs_you');
-  const list = a.map((x) => ({ name: x.name, status: x.status === 'needs_you' || x.status === 'working' ? x.status : 'idle' }));
-  const key = JSON.stringify(list);
-  if (key !== n3d.agentsKey) { n3d.agentsKey = key; N3.setAgents(list); N3.setActivity(working, Math.max(1, a.length)); }
-  const st = need ? 'alert' : working ? 'busy' : 'normal';
-  if (N3.state.status !== st) N3.setStatus(st);
-  const r = state.gh.run, rk = r ? r.run_number + ':' + r.status : '';
-  if (n3d.runKey && rk && rk !== n3d.runKey) N3.pulse(); // new deploy activity
-  if (rk) n3d.runKey = rk;
-}
-function placeHolo() {
-  if (!N3 || !n3d.webgl) return;
-  const slot = $('#view [data-holo-slot]'); if (!slot) return;
-  if (!n3d.holo) {
-    n3d.holo = document.createElement('div'); n3d.holo.className = 'holo-host';
-    slot.replaceChildren(n3d.holo);
-    N3.mountHologram(n3d.holo, BUNNY, { label: 'Calo the bunny, holographic 3D model. Drag to spin.' });
-  } else if (n3d.holo.parentElement !== slot) slot.replaceChildren(n3d.holo); // re-use one WebGL context across re-renders
-}
-function after3D() {
-  if (!N3) return;
-  N3.attachPanels('#view .panel, #s2 .panel', { boot: !n3d.booted });
-  n3d.booted = true;
-  placeHolo(); if (!SEC) sync3D(); refreshFocus();
-}
-function reset3D() {
-  if (!N3) return;
-  n3d.booted = false;
-  if (SEC) return; // screens 2 and 3 have no core (and must not reset screen 1's)
-  N3.back(); n3d.agentsKey = ''; N3.setAgents([]); N3.setActivity(0, 1); N3.setStatus('normal');
-}
-// focus detail: real data per area
-const drow = (dot, title, sub, right = '', href = '', attrs = '') => {
-  const inner = `<span class="dot ${dot}"></span><div class="grow"><b class="ell" style="display:block">${title}</b>${sub ? `<div class="mutedt sm">${sub}</div>` : ''}</div>${right}`;
-  const u = safeUrl(href);
-  return u ? `<a class="row hov" href="${esc(u)}" target="_blank" rel="noopener">${inner}</a>` : attrs ? `<button class="row drow" ${attrs}>${inner}</button>` : `<div class="row">${inner}</div>`;
-};
-const kvs = (items) => `<div class="kv dkv">${items.map(([k, v, cls = '']) => `<div><div class="label">${k}</div><div class="big ${cls}">${v}</div></div>`).join('')}</div>`;
-function renderArea(area) {
-  const wait = `<div class="empty">${state.statusErr ? esc(state.statusErr) : 'Decrypting…'}</div>`;
-  if (area === 'team') {
-    const a = agents(), c = counts(); if (!state.status) return wait;
-    const order = { needs_you: 0, working: 1, done: 2, idle: 3 };
-    const rows = a.map((x, i) => [x, i]).sort((p, q) => (order[p[0].status] ?? 4) - (order[q[0].status] ?? 4)).map(([x, i]) => {
-      const s = stOf(x), right = `<span class="badge ${s.badge}">${s.label}</span>`;
-      return drow(s.dot, `${esc(x.name)} <small class="mutedt">${esc(KIND[x.kind] || x.kind || '')}</small>`, esc(x.task || (x.status === 'idle' ? 'Standing by' : '')), right, '', SEC ? `data-select="${i}"` : `data-agent="${i}"`);
-    }).join('');
-    return kvs([['Working', c.working], ['Need you', c.need, c.need ? 'warnc' : ''], ['Agents', c.total]]) + `<div class="dlist">${rows || '<div class="empty">No agents yet</div>'}</div>` + `<div class="dfoot mutedt sm">${state.status.updatedAt ? 'Updated ' + esc(ago(state.status.updatedAt)) + ' · ' : ''}Encrypted feed</div>`;
-  }
-  if (area === 'github') {
-    const g = state.gh, r = g.run, cm = g.commit, rs = runState(), prs = g.prs || [];
-    const dep = rs === 'ok' ? ['Live', 'okc'] : rs === 'bad' ? ['Failed', 'badc'] : rs === 'warn' ? ['Running', 'warnc'] : ['…', ''];
-    let h = kvs([['Deploy', dep[0], dep[1]], ['Open PRs', g.prs ? prs.length : '…'], ['Last commit', cm ? esc(ago(cm.date)) : '…']]);
-    h += '<div class="dlist">';
-    if (r) h += drow(rs === 'ok' ? 'ok' : rs === 'bad' ? 'bad' : 'warn', 'Latest deploy · ' + esc(r.name || 'workflow'), `${r.status !== 'completed' ? 'Deploying now' : esc(r.conclusion || '')} · run #${esc(r.run_number)} · ${esc(ago(r.updated_at))}`, '', r.html_url);
-    if (cm) h += drow('', esc(cm.message), `<span class="mono">${esc(cm.sha)}</span> · ${esc(cm.author || '')} · ${esc(ago(cm.date))}`, '', cm.html_url);
-    h += '</div><div class="label" style="margin:0.75rem 0 2px">Open pull requests</div><div class="dlist">';
-    h += g.prs ? (prs.length ? prs.map((p) => drow('', `#${esc(p.number)} ${esc(p.title)}`, 'Updated ' + esc(ago(p.updated_at)), p.draft ? '<span class="badge dim">Draft</span>' : '<span class="badge acc">Ready</span>', p.html_url)).join('') : '<div class="empty">No open pull requests</div>') : '<div class="empty">Loading…</div>';
-    h += '</div>';
-    if (g.error) h += `<div class="mutedt sm" style="margin-top:0.5rem">${esc(g.error)}</div>`;
-    return h + `<div class="dfoot mutedt sm"><a class="lnk" href="https://github.com/${REPO}" target="_blank" rel="noopener">${REPO}</a>${g.fetchedAt ? ' · synced ' + esc(ago(g.fetchedAt)) : ''}</div>`;
-  }
-  if (area === 'tasks') {
-    const t = tasks(); if (!state.status) return wait;
-    const done = t.filter((x) => x.done).length;
-    const rows = t.map((x) => { const u = safeUrl(x.link); const inner = `<span class="chk ${x.done ? 'done' : ''}"></span><span class="grow ${x.done ? 'strike' : ''}">${esc(x.title)}</span>`;
-      return u ? `<a class="row hov" href="${esc(u)}" target="_blank" rel="noopener">${inner}</a>` : `<div class="row">${inner}</div>`; }).join('');
-    return kvs([['Done', `${done} / ${t.length}`], ['Left', t.length - done]]) + `<div class="dlist">${rows || '<div class="empty">No tasks yet</div>'}</div>` + `<div class="dfoot mutedt sm"><a class="lnk" href="${NOTION_TASKS}" target="_blank" rel="noopener">Open tasks in Notion</a></div>`;
-  }
-  if (area === 'calo') {
-    const c = state.calo, s = caloStats(), up = updates().slice(0, 4);
-    const stv = !c.checkedAt ? ['…', ''] : c.online ? ['Online', 'okc'] : ['Offline', 'badc'];
-    let h = kvs([['Version', esc(s.version)], ['Status', stv[0], stv[1]], ['Response', c.ms ? esc(c.ms) + ' ms' : '—']]);
-    h += `<div class="mutedt sm" style="margin:2px 0 0.5rem">Live at <a class="lnk" href="${CALO}" target="_blank" rel="noopener">tyler467890.github.io/student-day-planner</a>${c.checkedAt ? ' · checked ' + esc(ago(c.checkedAt)) : ''}${c.cache ? ' · build <span class="mono">' + esc(c.cache) + '</span>' : ''}</div>`;
-    h += '<div class="label" style="margin:0.375rem 0 2px">Recent updates</div><div class="dlist">' + (up.length ? up.map((u) => drow('', esc(u.title), esc(dayLabel(u.time)))).join('') : '<div class="empty">No updates yet</div>') + '</div>';
-    return h;
-  }
-  if (area === 'business') {
-    return `<p class="mutedt" style="margin-bottom:0.75rem">Sales, profit, ads and email show up here once Calo is on Etsy. Nothing is connected yet, so there are no numbers to show.</p>
-      <div class="dlist">${[['Sales & profit', 'Etsy revenue and orders'], ['Ads', 'Spend, clicks and conversions'], ['Email', 'Support inbox']].map(([a, b]) => drow('idle', a, b, '<span class="soon">After launch</span>')).join('')}</div>`;
-  }
-  return '';
-}
-function fillFocus(area, body) {
-  if (!area || !body || body.querySelector('.n3d-remote-note')) return;
-  const top = body.scrollTop; body.innerHTML = renderArea(area); body.scrollTop = top;
-}
-function refreshFocus() {
-  if (!N3 || !N3.state.focus) return;
-  fillFocus(N3.state.focus, document.querySelector('.n3d-detail-body'));
-}
-// screens 2 and 3 (and the right half of one stretched window) share one set of panels; the grid shows the ones for this role
-const GRID = { team: ['agents', 'detail', 'logs', 'code'], build: ['gh', 'calo', 'tasks', 'biz', 'dock'], merged: ['agents', 'detail', 'code', 'gh', 'calo', 'tasks', 'biz', 'dock'] };
-const FILL = { agents: xAgents, detail: xDetail, logs: xLogs, code: xCode, gh: xGitHub, calo: xCalo, tasks: () => tasksInner(), biz: xBiz, dock: dockInner };
-const wideOn = () => !SEC && document.documentElement.getAttribute('data-n3d-layout') === 'wide';
-function renderSec() {
-  if (!$('#s2') || !(SEC || wideOn())) return;
-  const g = SEC ? ROLE : 'merged', grid = $('#grid2'), clk = clockParts();
-  if (grid.dataset.g !== g) grid.dataset.g = g;
-  patch($('#s2bar'), `<div class="brand">${brandMark()}<div class="name">NOVA</div><div class="sub">${SEC ? `Screen ${SCR} · ${esc(roleName())}` : 'Screen 2 · Team · Build'}</div></div>
-   <div class="tright"><span class="pill link" data-peer><span class="dot idle"></span><span class="linktxt">${SEC ? 'Looking for screen 1…' : 'Wide mode · both screens'}</span></span>
-   <span class="clk" data-topclock2>${esc(clk.date.toUpperCase())} · ${esc(clk.hm)} ${esc(clk.ap)} ${esc(clk.zone)}</span>
-   ${fpsTag()}${fsButton()}${SEC && canPlace() ? `<button class="lockbtn placebtn" data-place title="Move this window to its monitor and make it full screen">${ic('monitor', 15, 'currentColor')}<span class="lt">Place on monitor</span></button>` : ''}
-   <button class="lockbtn setbtn" data-settings title="Settings">${ic('gear', 15, 'currentColor')}<span class="lt">Settings</span></button>
-   ${SEC ? `<button class="lockbtn" data-lock title="Lock NOVA on every screen">${ic('lock', 15, 'currentColor')}<span class="lt">Lock</span></button>` : ''}</div>`);
-  for (const k of GRID[g]) patch($('#x-' + k), FILL[k]());
-  const f = (N3 && N3.state.focus) || state.focus || null;
-  document.querySelectorAll('#s2 [data-area]').forEach((el) => el.classList.toggle('hl', !!f && el.dataset.area === f));
-  const bl = $('#x-baylbl'); if (bl) bl.textContent = `Calo${state.calo.version ? ' v' + state.calo.version : ''} · phone + guide preview`;
-  updatePeer();
-}
-function updatePeer() {
-  const p = $('[data-peer]'); if (!p) return;
-  const on = !SEC || alive(1);
-  p.classList.toggle('on', on);
-  const t = !SEC ? 'Wide mode · both screens' : on ? 'Linked to screen 1' : 'Open NOVA on screen 1';
-  const tx = p.querySelector('.linktxt'); if (tx.textContent !== t) tx.textContent = t;
-}
-if (N3) {
-  document.addEventListener('nova:3d-ready', (e) => {
-    n3d.webgl = !!e.detail.webgl;
-    document.documentElement.classList.toggle('n3d-on', n3d.webgl);
-  });
-  document.addEventListener('nova:focus', (e) => { fillFocus(e.detail.area, e.detail.body); if (!SEC) relay(); else renderSec(); });
-  // screens without a core flash their logo when the core pulses (new deploy, a pick on screen 1)
-  document.addEventListener('nova:pulse', () => { if (!SEC) return; const m = $('#s2bar .mark'); if (!m) return; m.classList.remove('pflash'); void m.getBoundingClientRect(); m.classList.add('pflash'); });
-  document.addEventListener('nova:agent-select', (e) => openAgent(e.detail.index));
-  document.addEventListener('nova:layout', (e) => { wideSplit(); if (n3d.shown) render(); if (e.detail.layout === 'wide') wideTip(); });
-  window.addEventListener('hashchange', () => { if (N3.state.focus) N3.back(); });
-  setInterval(updatePeer, 2000);
-  setInterval(() => { const t = $('[data-topclock2]'); if (t) { const c = clockParts(); t.textContent = `${c.date.toUpperCase()} · ${c.hm} ${c.ap} ${c.zone}`; } }, 1000);
-}
+const refreshConnAll = () => refreshConn().then(refreshCode);
 
-// ---------- screens: 1 Command · 2 Team · 3 Build & Business ----------
-// Each screen is its own window that fills its own monitor (?screen=2, ?screen=3). They talk over a BroadcastChannel:
-// heartbeats (who is open), selection, prefs, and a data relay. Only screen 1 signs in to nova-api; it relays what the
-// other screens show, so no session or key ever exists in screens 2 and 3.
-const PREFS_KEY = 'nova.prefs', AUTO_KEY = 'nova.perf.auto', ASSIGN_KEY = 'nova.scr.assign';
-const prefs = () => Object.assign({ perf: 'auto', glass: false, fps: false, wide: 'auto', screens: 'auto' }, lsGet(PREFS_KEY) || {});
-const isFs = () => !!document.fullscreenElement;
-const canPlace = () => 'getScreenDetails' in window;
-const unlocked = () => n3d.shown && $('#lock').hidden;
-let screenSD = null; // ScreenDetails once the browser has allowed window management
-function fsButton() {
-  const on = isFs();
-  return `<button class="lockbtn fsbtn" data-fullscreen title="${on ? 'Leave full screen (Esc)' : 'Fill this monitor: hides the browser bars (same as F11)'}">${ic(on ? 'exitfull' : 'full', 16, 'currentColor', 2)}<span class="lt">${on ? 'Exit full screen' : 'Full screen'}</span></button>`;
-}
-function fpsTag() {
-  if (!prefs().fps || !N3) return '';
-  const s = N3.state; return `<span class="fpsread" data-fps>${fpsText(s)}</span>`;
-}
-const MODE_NAME = { smooth: 'Smooth', full: 'Full effects', minimal: 'Minimal' };
-function fpsText(s) { return s.lite ? `${s.fps} fps · holograms · ${MODE_NAME[s.mode] || s.mode}` : `${s.fps} fps · ${MODE_NAME[s.mode] || s.mode}${s.lowDpr ? ' · 1x' : ''}`; }
-async function toggleFs() {
-  if (document.fullscreenElement) { try { await document.exitFullscreen(); } catch (e) {} return; }
-  goFull();
-}
-// full screen; screens 2 and 3 go straight to the monitor they were given by Set up screens
-async function goFull() {
-  let target = null;
-  try { target = await targetMonitor(false); } catch (e) {}
-  try { await document.documentElement.requestFullscreen(target ? { screen: target, navigationUI: 'hide' } : { navigationUI: 'hide' }); }
-  catch (e) { toast(`<div><b>Full screen didn’t start</b><div class="mutedt sm">Press <kbd class="k">F11</kbd> instead. It does the same thing.</div></div>`, 8000); }
-}
-document.addEventListener('fullscreenchange', () => {
-  document.documentElement.classList.toggle('is-fs', isFs());
-  if (isFs()) { lsSet('nova.tip.fs.' + SCR, 1); hideToast('fs'); $('#fsask') && $('#fsask').remove(); }
-  if (unlocked()) render();
-  wideSplit();
-});
-
-// --- who is open: heartbeats every 2 s (also kept in localStorage so a new window knows before the first beat)
-const chan = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('nova-screens') : { postMessage() {}, set onmessage(f) {} };
-const peers = {};
-const liveKey = (n) => 'nova.scr.' + n;
-function alive(n) {
-  if (n === SCR) return true;
-  const b = peers[n] || lsGet(liveKey(n));
-  return !!b && Date.now() - b.t < (b.h ? 75000 : 6500); // a minimised window beats slowly, so give it longer
-}
-// how many screens NOVA is spread over: the Layout setting, or (Auto) the windows that are open right now
-function screensWanted() {
-  const p = String(prefs().screens);
-  if (p === '1' || p === '2' || p === '3') return +p;
-  return alive(3) ? 3 : alive(2) ? 2 : 1;
-}
-function computeRole() {
-  if (SCR === 3) return 'build';
-  if (SCR === 2) return screensWanted() >= 3 ? 'team' : 'merged';
-  if (innerWidth <= 760) return 'all';
-  return wideOn() || screensWanted() >= 2 ? 'command' : 'all';
-}
-function applyRole() {
-  const r = computeRole(); if (r === ROLE) return false;
-  ROLE = r; document.documentElement.setAttribute('data-role', r);
-  if (N3) { N3.relayout(); if (r !== 'command' && r !== 'all') N3.back(); }
-  if (!SEC && r === 'command' && conn.status && conn.cursor === undefined) refreshCode();
-  return true;
-}
-const winCentre = () => ({ x: window.screenX + window.outerWidth / 2, y: window.screenY + window.outerHeight / 2 });
-let closing = false;
-function beat() {
-  if (closing) return;
-  const b = { t: Date.now(), h: document.hidden };
-  lsSet(liveKey(SCR), b);
-  chan.postMessage({ t: 'beat', s: SCR, h: b.h, c: winCentre() });
-}
-let liveSig = '';
-function checkScreens() {
-  const changed = applyRole(), sig = [1, 2, 3].map((n) => +alive(n)).join('');
-  if (changed || sig !== liveSig) { liveSig = sig; if (unlocked()) render(); }
-}
-setInterval(() => { beat(); checkScreens(); }, 2000);
-document.addEventListener('visibilitychange', beat);
-window.addEventListener('pagehide', () => { closing = true; chan.postMessage({ t: 'bye', s: SCR }); try { localStorage.removeItem(liveKey(SCR)); } catch (e) {} });
-chan.onmessage = (e) => {
-  const m = e.data || {};
-  if (m.t === 'beat' && m.s !== SCR) { const was = !!peers[m.s] && alive(m.s); peers[m.s] = { t: Date.now(), h: !!m.h, c: m.c }; if (!was) { relay(true); checkScreens(); } }
-  else if (m.t === 'bye') { delete peers[m.s]; checkScreens(); }
-  else if (m.t === 'hello') relay(true);
-  else if (m.t === 'snap' && SEC) takeSnap(m.d);
-  else if (m.t === 'sel' && typeof m.i === 'number') { state.selAgent = m.i; if (unlocked()) render(); }
-  else if (m.t === 'recheck' && !SEC && unlocked()) checkCalo(true);
-  else if (m.t === 'fs-ask' && SEC && (!m.s || m.s === SCR) && !isFs()) fsAsk();
-  else if (m.t === 'ident') showScreenLabel();
-  else if (m.t === 'prefs') applyPrefs(false);
-};
-beat();
-
-// --- data relay: screen 1 -> screens 2 and 3 (decrypted status, GitHub, Calo, replies, Cursor and Copilot lists; never a token)
+// ---------- relay: screen 1 -> screens 2 and 3 (decrypted status, GitHub, Calo, replies, agent lists; never a token) ----------
 let snapKey = '', relayAt = 0;
 function snapshot() {
   const g = state.gh;
-  return { status: state.status, statusErr: state.statusErr, calo: state.calo, focus: (N3 && N3.state.focus) || null, sel: state.selAgent,
+  return { status: state.status, statusErr: state.statusErr, calo: state.calo,
     gh: { prs: g.prs, run: g.run, runs: g.runs, commit: g.commit, commits: g.commits, fetchedAt: g.fetchedAt, error: g.error, rateResetAt: g.rateResetAt },
-    conn: { signed: !!conn.session, err: conn.err, status: conn.status, inbox: conn.inbox, cursor: conn.cursor || null, copilot: conn.copilot || null } };
+    conn: { signed: !!conn.session, err: conn.err, status: conn.status, inbox: conn.inbox, inboxAt: conn.inboxAt, cursor: conn.cursor || null, copilot: conn.copilot || null } };
 }
 function relay(force) {
   if (SEC || !unlocked()) return;
@@ -1060,63 +707,217 @@ function takeSnap(d) {
   state.statusErr = d.status ? '' : d.statusErr || state.statusErr;
   Object.assign(state.gh, d.gh || {}); if (d.calo) state.calo = d.calo;
   const c = d.conn || {};
-  conn.status = c.status || null; conn.inbox = c.inbox || []; conn.err = c.err || ''; conn.cursor = c.cursor; conn.copilot = c.copilot;
-  state.focus = d.focus || null; if (typeof d.sel === 'number') state.selAgent = d.sel;
-  render();
+  conn.status = c.status || null; conn.inbox = c.inbox || []; conn.inboxAt = c.inboxAt || 0; conn.err = c.err || ''; conn.cursor = c.cursor; conn.copilot = c.copilot;
+  render(); noticeReplies();
 }
 const relayAlive = () => SEC && alive(1) && relayAt > 0;
-
-// --- Cursor agents and Copilot tasks (screen 1 only, read-only GET routes on nova-api)
-async function refreshCode() {
-  if (SEC || !conn.session || !conn.status) return;
-  if (ROLE !== 'command' && screensWanted() < 2) return; // only shown on the Team screen
-  const at = Date.now(), why = (e) => e.status === 503 ? 'Not connected yet.' : e.status === 429 ? 'Busy, trying again soon.' : e.status === 401 ? 'Not signed in to the secure service.' : 'Couldn’t load right now.';
-  const keep = (k) => (conn[k] && conn[k].items) || [];
-  const str = (v, n = 200) => String(v ?? '').slice(0, n);
-  const jobs = [];
-  if (isOn('cursor')) jobs.push(api('/cursor/agents').then((d) => { conn.cursor = { at, used: d.used_today, cap: d.cap, items: (d.agents || []).slice(0, 20).map((a) => ({ name: str(a.name), status: str(a.status, 40), url: str(a.url, 500), updatedAt: str(a.updatedAt, 40) })) }; }, (e) => { conn.cursor = { at, items: keep('cursor'), err: why(e) }; }));
-  else conn.cursor = null;
-  if (isOn('copilot') || isOn('github')) jobs.push(api('/github/copilot-tasks').then((d) => { conn.copilot = { at, source: d.source, items: (d.tasks || []).slice(0, 20).map((t) => ({ title: str(t.title), state: str(t.state, 40), repo: str(t.repo, 100), url: str(t.url, 500), updated_at: str(t.updated_at, 40) })) }; }, (e) => { conn.copilot = { at, items: keep('copilot'), err: why(e) }; }));
-  else conn.copilot = null;
-  await Promise.all(jobs);
-  if (unlocked()) render();
+// screens 2 and 3 hand a confirmed command to screen 1, which sends it with its session and answers
+const waiting = new Map();
+function relaySend(payload) {
+  if (!alive(1)) return Promise.resolve({ ok: false, msg: 'Open NOVA on screen 1 (the core) to send messages.' });
+  const id = Math.random().toString(36).slice(2);
+  return new Promise((res) => {
+    const tm = setTimeout(() => { waiting.delete(id); res({ ok: false, msg: 'Screen 1 didn’t answer. Check that NOVA is unlocked there.' }); }, 30000);
+    waiting.set(id, (r) => { clearTimeout(tm); res(r); });
+    chan.postMessage({ t: 'cmd', id, p: { target: String(payload.target), text: String(payload.text).slice(0, 4000), repo: payload.repo ? String(payload.repo) : null } });
+  });
 }
-const refreshConnAll = () => refreshConn().then(refreshCode);
+async function onRelayedCmd(m) {
+  if (SEC || !unlocked() || !m.p) return;
+  const r = await sendDirect(m.p);
+  chan.postMessage({ t: 'cmdres', id: m.id, r });
+  if (r.ok) setTimeout(() => pollInbox(), 4000);
+}
+chan.onmessage = (e) => {
+  const m = e.data || {};
+  if (m.t === 'beat' && m.s !== SCR) { const was = alive(m.s); peers[m.s] = { t: Date.now(), h: !!m.h, c: m.c, w: m.w, hh: m.hh }; if (!was) { relay(true); checkScreens(); } if (scrAt('centre') === m.s) redrawGrid(); }
+  else if (m.t === 'bye') { delete peers[m.s]; checkScreens(); }
+  else if (m.t === 'hello') relay(true);
+  else if (m.t === 'snap' && SEC) takeSnap(m.d);
+  else if (m.t === 'layout') takeLayout(m.L);
+  else if (m.t === 'flash') flashTab(m.id);
+  else if (m.t === 'ping') { const el = tileEl(m.id); if (el) { el.classList.remove('ping'); void el.offsetWidth; el.classList.add('ping'); } }
+  else if (m.t === 'seen' || m.t === 'sent' || m.t === 'target') { renderTiles(); updateUnread(); }
+  else if (m.t === 'draft') { const ta = $('#tiles .tile[data-tab="chat"] textarea'); if (ta && document.activeElement !== ta) ta.value = localStorage.getItem(LS.draft) || ''; }
+  else if (m.t === 'cmd') onRelayedCmd(m);
+  else if (m.t === 'cmdres' && waiting.has(m.id)) { waiting.get(m.id)(m.r || { ok: false, msg: 'No answer' }); waiting.delete(m.id); }
+  else if (m.t === 'pollnow' && !SEC && unlocked()) pollInbox();
+  else if (m.t === 'recheck' && !SEC && unlocked()) checkCalo(true);
+  else if (m.t === 'fs-ask' && SEC && !isFs()) fsAsk();
+  else if (m.t === 'ident') showScreenLabel();
+  else if (m.t === 'prefs') applyPrefs();
+};
+window.addEventListener('storage', (e) => {
+  if (e.key === LS.layout) { try { takeLayout(JSON.parse(e.newValue)); } catch {} }
+  else if (e.key === LS.prefs) applyPrefs();
+  else if (e.key === LS.pass) { if (!e.newValue && unlocked()) lock(); else if (e.newValue && !unlocked()) autoUnlock(); } // lock / unlock every screen together
+});
 
-// --- Set up screens: one click on screen 1 opens screens 2 and 3 on the other monitors
+// ---------- the 3D core (screen 1 only; loaded on demand so screens 2 and 3 never parse three.js) ----------
+let N3 = null, agentsKey = '', runKey = '';
+function load3D() {
+  if (SEC) return;
+  const cv = document.createElement('canvas'); cv.id = 'nova-3d'; cv.setAttribute('aria-hidden', 'true'); document.body.appendChild(cv);
+  const s = document.createElement('script'); s.src = '3d/nova-3d.min.js';
+  s.onload = () => {
+    try {
+      N3 = window.NOVA3D; N3.init({ areas: AREAS });
+      if (!N3.state || !document.querySelector('.n3d-node-label')) { root.classList.add('n3d-no-webgl'); N3 = null; }
+    } catch (e) { console.info('NOVA 3D unavailable:', e.message); N3 = null; root.classList.add('n3d-no-webgl'); }
+    if (!N3) fallbackCore(); else { root.classList.add('n3d-on'); agentsKey = ''; sync3D(); updateUnread(); applyPrefs(); N3.setPaused(!unlocked()); }
+  };
+  s.onerror = () => { root.classList.add('n3d-no-webgl'); fallbackCore(); };
+  document.body.appendChild(s);
+}
+document.addEventListener('nova:open', (e) => openTab(e.detail.area));
+document.addEventListener('nova:perf', (e) => {
+  const d = e.detail; if (d.auto) lsSet(LS.auto, { mode: d.mode, lowDpr: d.lowDpr });
+  root.setAttribute('data-n3d-mode', d.mode); redrawGrid();
+  if (d.reason === 'minimal') note(`<b>Switched to Minimal effects</b><span class="mutedt">The core was drawing ${d.fps} fps here, so NOVA turned it down to stay smooth. Change it in Settings.</span>`, 12000);
+});
+function sync3D() {
+  if (!N3) return;
+  const a = agents(), working = a.filter((x) => x.status === 'working').length, need = a.some((x) => x.status === 'needs_you');
+  const list = a.map((x) => ({ name: x.name, status: x.status === 'needs_you' || x.status === 'working' ? x.status : 'idle' }));
+  const key = JSON.stringify(list);
+  if (key !== agentsKey) { agentsKey = key; N3.setAgents(list); N3.setActivity(working, Math.max(1, a.length)); }
+  // the core stays blue; an agent that needs you shows as an amber badge on the AI Team node instead
+  N3.setStatus(working ? 'busy' : 'normal'); N3.setUnread('team', a.filter((x) => x.status === 'needs_you').length);
+  const r = state.gh.run, rk = r ? r.run_number + ':' + r.status : '';
+  if (runKey && rk && rk !== runKey) N3.pulse(); if (rk) runKey = rk;
+}
+// no WebGL: the same nodes as plain buttons around an SVG ring
+function fallbackCore() {
+  const nav = $('#corenav'); if (!nav) return;
+  root.classList.add('n3d-fallback');
+  nav.innerHTML = `<div class="fring">${coreRing()}</div>` + AREAS.map((a) => { const r = a.angle * Math.PI / 180; return `<button type="button" class="fnode ${a.muted ? 'muted' : ''} ${a.primary ? 'primary' : ''}" data-open="${a.id}" style="left:${(50 + Math.cos(r) * 41).toFixed(1)}%;top:${(50 - Math.sin(r) * 41).toFixed(1)}%">${ic(a.icon, 18)}<span>${esc(a.label)}</span><b class="nb" hidden></b></button>`; }).join('');
+  updateUnread();
+}
+document.addEventListener('click', (e) => { const b = e.target.closest('#corenav [data-open]'); if (b) openTab(b.dataset.open); });
+
+// ---------- the tiny menu (top-right corner, fades in when the mouse moves) ----------
+const isFs = () => !!document.fullscreenElement;
+const canPlace = () => 'getScreenDetails' in window;
+let idleT = 0;
+document.addEventListener('pointermove', () => { if (!root.classList.contains('awake')) root.classList.add('awake'); clearTimeout(idleT); idleT = setTimeout(() => { if ($('#menu').hidden) root.classList.remove('awake'); }, 2600); }, { passive: true });
+$('#menuBtn').innerHTML = ic('menu', 20, 'currentColor', 1.8);
+function openMenu() {
+  const m = $('#menu');
+  const item = (attr, icon, text, sub = '') => `<button type="button" role="menuitem" ${attr}>${ic(icon, 17)}<span>${text}${sub ? `<small>${sub}</small>` : ''}</span></button>`;
+  m.innerHTML = [
+    item('data-open-tab="chat"', 'chat', 'Chat'),
+    item('data-fullscreen', 'full', isFs() ? 'Exit full screen' : 'Full screen'),
+    SEC ? (canPlace() ? item('data-place', 'monitor', 'Place on monitor') : '') : item('data-setup', 'monitor', 'Set up screens', 'Opens the left and right screens'),
+    item('data-clear', 'clear', 'Clear screens', 'Close every open tab'),
+    item('data-open-tab="settings"', 'gear', 'Settings'),
+    item('data-ident', 'grid', 'Identify screens'),
+    item('data-lock', 'lock', 'Lock'),
+  ].join('');
+  m.hidden = false; $('#menuBtn').setAttribute('aria-expanded', 'true'); root.classList.add('awake');
+  const f = m.querySelector('button'); if (f) f.focus();
+}
+function closeMenu() { const m = $('#menu'); if (m.hidden) return; m.hidden = true; $('#menuBtn').setAttribute('aria-expanded', 'false'); }
+$('#menuBtn').addEventListener('click', (e) => { e.stopPropagation(); if ($('#menu').hidden) openMenu(); else closeMenu(); });
+document.addEventListener('click', (e) => { if (!e.target.closest('#menu,#menuBtn')) closeMenu(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+
+// global actions (menu, Settings tab, toasts)
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-open-tab],[data-fullscreen],[data-place],[data-setup],[data-clear],[data-ident],[data-lock],[data-conn],[data-recheck],[data-perfretry],[data-fsgo],[data-fsno],[data-openmore],[data-notex]');
+  if (!t) return;
+  if (t.closest('#menu')) closeMenu();
+  if (t.hasAttribute('data-open-tab')) openTab(t.getAttribute('data-open-tab'), t.getAttribute('data-open-tab') === 'settings' ? posOf(SCR) : undefined);
+  else if (t.hasAttribute('data-fullscreen')) toggleFs();
+  else if (t.hasAttribute('data-place')) placeOnOther();
+  else if (t.hasAttribute('data-setup')) setupScreens();
+  else if (t.hasAttribute('data-clear')) clearScreens();
+  else if (t.hasAttribute('data-ident')) { showScreenLabel(); chan.postMessage({ t: 'ident' }); }
+  else if (t.hasAttribute('data-lock')) lock();
+  else if (t.hasAttribute('data-conn')) { if (!SEC) { openConnections(); if (!conn.status) refreshConn().then(() => { if ($('#modal .conn')) openConnections(); }); } }
+  else if (t.hasAttribute('data-recheck')) { if (SEC && alive(1)) chan.postMessage({ t: 'recheck' }); else checkCalo(true); }
+  else if (t.hasAttribute('data-perfretry')) { localStorage.removeItem(LS.auto); if (N3) N3.setMode('smooth', { auto: true }); renderTiles(); }
+  else if (t.hasAttribute('data-fsgo')) { $('#fsask') && $('#fsask').remove(); goFull(); }
+  else if (t.hasAttribute('data-fsno')) { $('#fsask') && $('#fsask').remove(); }
+  else if (t.hasAttribute('data-openmore')) { hideNote(); openPending(); }
+  else if (t.hasAttribute('data-notex')) hideNote();
+});
+// Settings tab inputs: performance mode and the screen order
+document.addEventListener('change', (e) => {
+  const p = e.target.closest('[data-pref]');
+  if (p) { setPref({ [p.getAttribute('data-pref')]: p.type === 'checkbox' ? p.checked : p.value }); return; }
+  const o = e.target.closest('[data-order]');
+  if (o) {
+    const cur = { ...order() }, slot = o.getAttribute('data-order'), n = +o.value, other = POS.find((x) => cur[x] === n);
+    if (other && other !== slot) cur[other] = cur[slot]; cur[slot] = n;
+    setPref({ order: cur });
+  }
+});
+function setPref(p) {
+  const next = Object.assign(prefs(), p); lsSet(LS.prefs, next);
+  if (p.perf) localStorage.removeItem(LS.auto);
+  applyPrefs(); chan.postMessage({ t: 'prefs' });
+}
+function applyPrefs() {
+  const p = prefs();
+  if (N3) {
+    if (p.perf === 'auto') { const a = lsGet(LS.auto); if (!N3.state.modeAuto) N3.setMode(a && a.mode ? a.mode : 'smooth', { auto: true, silent: true }); }
+    else if (N3.state.mode !== p.perf || N3.state.modeAuto) N3.setMode(p.perf, { auto: false, silent: true });
+    root.setAttribute('data-n3d-mode', N3.state.mode);
+  } else root.setAttribute('data-n3d-mode', p.perf === 'auto' ? 'smooth' : p.perf);
+  redrawGrid(); renderTiles(); updateUnread();
+}
+setInterval(() => { const el = $('#tiles [data-perfnow]'); if (el && N3) { const s = N3.state; const v = `Right now: ${MODE_NAME[s.mode]} · ${s.fps} fps drawn${s.busyFps ? ` · ${s.busyFps} fps while you move it` : ''} · resolution ${s.pixelRatio}x`; if (el.firstChild && el.firstChild.nodeType === 3 && el.firstChild.nodeValue !== v) el.firstChild.nodeValue = v; } }, 2000);
+
+// ---------- small notes (bottom centre; only for things you asked for) ----------
+let noteTm = 0;
+function note(html, ms = 9000) {
+  hideNote();
+  document.body.insertAdjacentHTML('beforeend', `<div class="ntoast" id="ntoast" role="status"><div class="nt">${html}</div><button class="x" data-notex aria-label="Dismiss">✕</button></div>`);
+  clearTimeout(noteTm); if (ms) noteTm = setTimeout(hideNote, ms);
+}
+function hideNote() { const t = $('#ntoast'); if (t) t.remove(); }
+
+// ---------- full screen + Set up screens (Window Management API) ----------
+async function toggleFs() { if (document.fullscreenElement) { try { await document.exitFullscreen(); } catch (e) {} return; } goFull(); }
+async function goFull() {
+  let target = null; try { target = await targetMonitor(false); } catch (e) {}
+  try { await root.requestFullscreen(target ? { screen: target, navigationUI: 'hide' } : { navigationUI: 'hide' }); }
+  catch (e) { note('<b>Full screen didn’t start</b><span class="mutedt">Press <kbd class="k">F11</kbd> instead. It does the same thing.</span>', 8000); }
+}
+document.addEventListener('fullscreenchange', () => { root.classList.toggle('is-fs', isFs()); $('#fsask') && isFs() && $('#fsask').remove(); renderTiles(); });
+let screenSD = null;
 async function screenDetails(ask) {
   if (!canPlace()) return null;
   try {
     if (!ask) { const st = await navigator.permissions.query({ name: 'window-management' }).catch(() => null); if (!st || st.state !== 'granted') return null; }
-    screenSD = await window.getScreenDetails();
-    screenSD.onscreenschange = () => { wideSplit(); checkScreens(); };
-    return screenSD;
+    screenSD = await window.getScreenDetails(); screenSD.onscreenschange = () => checkScreens(); return screenSD;
   } catch (e) { return null; }
 }
 const inside = (s, p) => !!p && p.x >= s.left && p.x < s.left + s.width && p.y >= s.top && p.y < s.top + s.height;
 const placeFeat = (s) => `popup,left=${s.availLeft},top=${s.availTop},width=${s.availWidth},height=${s.availHeight}`;
 const plainFeat = (n) => `popup,left=${Math.round((screen.availLeft || 0) + 60 * n)},top=${Math.round((screen.availTop || 0) + 50 * n)},width=${Math.round(Math.min(1600, screen.availWidth * 0.75))},height=${Math.round(Math.min(900, screen.availHeight * 0.75))}`;
 function scrUrl(n, setup) { const u = new URL(location.href); u.hash = ''; u.searchParams.delete('setup'); u.searchParams.set('screen', String(n)); if (setup) u.searchParams.set('setup', '1'); return u.href; }
-// monitors for screens 2..want, left to right, skipping the one this window (screen 1) is on
-function monitorsFor(sd, want) {
-  const here = winCentre(), others = ((sd && sd.screens) || []).filter((s) => !inside(s, here)).sort((a, b) => a.left - b.left || a.top - b.top);
-  const out = {}; for (let n = 2; n <= want; n++) out[n] = others[n - 2] || null; return out;
+// monitors, left to right, become the left / centre / right screens; screen 1 stays where it is
+function monitorsFor(sd) {
+  const out = {}; if (!sd || !sd.screens || sd.screens.length < 2) return out;
+  const mons = [...sd.screens].sort((a, b) => a.left - b.left || a.top - b.top), here = mons.find((s) => inside(s, winCentre())) || sd.currentScreen;
+  const mine1 = POS.indexOf(posOf(1)), hi = mons.indexOf(here), others = [2, 3];
+  others.forEach((n) => { const want = hi + (POS.indexOf(posOf(n)) - mine1); if (mons[want] && mons[want] !== here) out[n] = mons[want]; });
+  const free = mons.filter((m) => m !== here && !Object.values(out).includes(m));
+  others.forEach((n) => { if (!out[n] && free.length && sd.screens.length >= 3) out[n] = free.shift(); });
+  return out;
 }
 let pendingScr = [], setupMons = {};
 async function setupScreens() {
   if (SEC) return;
-  hideToast();
-  const sd = canPlace() ? await screenDetails(true) : null, nMon = sd ? sd.screens.length : 0, p = String(prefs().screens);
-  const want = p === '1' || p === '2' || p === '3' ? +p : nMon ? Math.min(3, nMon) : 2;
-  if (want < 2) {
-    if (nMon === 1) toast(`<div><b>Only one monitor found</b><div class="mutedt sm">Connect your other screens (on Windows press <kbd class="k">Win</kbd>+<kbd class="k">P</kbd> and pick <b>Extend</b>), then try again.</div></div>`, 12000, 'setup');
-    else toast(`<div><b>Layout is set to 1 screen</b><div class="mutedt sm">Change it in Settings to use more screens.</div></div><button class="btn" data-settings>Settings</button>`, 10000, 'setup');
-    return;
-  }
-  setupMons = sd ? monitorsFor(sd, want) : {};
+  hideNote();
+  const sd = canPlace() ? await screenDetails(true) : null, nMon = sd ? sd.screens.length : 0;
+  if (nMon === 1) { note('<b>Only one monitor found</b><span class="mutedt">Connect your other screens (on Windows press <kbd class="k">Win</kbd>+<kbd class="k">P</kbd> and pick <b>Extend</b>), then try again.</span>', 12000); return; }
+  setupMons = sd ? monitorsFor(sd) : {};
+  const want = sd ? Object.keys(setupMons).map(Number) : [2, 3];
   const assign = {}; Object.keys(setupMons).forEach((n) => { const m = setupMons[n]; if (m) assign[n] = { x: m.left + m.width / 2, y: m.top + m.height / 2 }; });
-  lsSet(ASSIGN_KEY, assign);
-  pendingScr = []; for (let n = 2; n <= want; n++) pendingScr.push(n);
+  lsSet(LS.assign, assign);
+  pendingScr = (want.length ? want : [2, 3]).sort();
   showScreenLabel(); chan.postMessage({ t: 'ident' });
   openPending();
 }
@@ -1129,156 +930,43 @@ function openPending() {
     if (m) { try { w.moveTo(m.availLeft, m.availTop); w.resizeTo(m.availWidth, m.availHeight); } catch (e) {} }
   }
   pendingScr = left;
-  if (left.length) { toast(`<div><b>One more click for screen ${left[0]}</b><div class="mutedt sm">Your browser opens one window per click. To open every screen at once next time, allow pop-ups for NOVA (icon at the right of the address bar).</div></div><button class="btn" data-openmore>Open screen ${left[0]}</button>`, 30000, 'setup'); return; }
+  if (left.length) { note(`<b>One more click for screen ${left[0]}</b><span class="mutedt">Your browser opens one window per click. Allow pop-ups for NOVA to open them all at once next time.</span><button class="btn sm" data-openmore>Open screen ${left[0]}</button>`, 30000); return; }
   const placed = Object.values(setupMons).some(Boolean);
-  toast(`<div><b>Screens are open</b><div class="mutedt sm">${placed ? 'Each one is on its own monitor. Click <b>Full screen</b> on each.' : 'Drag each window to its monitor (the big number shows which is which), then click <b>Full screen</b> on it.'}</div></div>`, 14000, 'setup');
+  note(`<b>Screens are open</b><span class="mutedt">${placed ? 'Each one is on its own monitor. Click <b>Full screen</b> on each.' : 'Drag each window to its monitor (the big label shows which is which), then press F11 or use the menu’s Full screen.'}</span>`, 12000);
 }
-function openOne(n) { if (SEC) return; pendingScr = [n]; openPending(); }
-// the monitor a secondary screen belongs on: the one Set up screens gave it, else one not showing another NOVA screen
 async function targetMonitor(ask) {
   if (!SEC || !canPlace()) return null;
   const sd = screenSD || await screenDetails(ask); if (!sd || sd.screens.length < 2) return null;
-  const a = (lsGet(ASSIGN_KEY) || {})[SCR]; if (a) { const s = sd.screens.find((x) => inside(x, a)); if (s) return s; }
+  const a = (lsGet(LS.assign) || {})[SCR]; if (a) { const s = sd.screens.find((x) => inside(x, a)); if (s) return s; }
   const avoid = [1, 2, 3].filter((n) => n !== SCR && peers[n] && alive(n)).map((n) => peers[n].c);
   return sd.screens.find((x) => !avoid.some((p) => inside(x, p))) || null;
 }
 async function placeOnOther() {
   const sd = await screenDetails(true);
-  if (!sd) { toast(`<div><b>Couldn’t reach your monitors</b><div class="mutedt sm">Allow “Window management” when Chrome or Edge asks, or drag the window over and click Full screen.</div></div>`, 10000); return; }
-  if (sd.screens.length < 2) { toast(`<div><b>Only one monitor found</b><div class="mutedt sm">On Windows press <kbd class="k">Win</kbd>+<kbd class="k">P</kbd> and pick <b>Extend</b>, then try again.</div></div>`, 12000); return; }
+  if (!sd || sd.screens.length < 2) { note('<b>Couldn’t place this window</b><span class="mutedt">Allow “Window management” when Chrome or Edge asks, or drag the window over and press F11.</span>', 10000); return; }
   const o = (await targetMonitor(false)) || sd.currentScreen;
-  try { await document.documentElement.requestFullscreen({ screen: o, navigationUI: 'hide' }); }
-  catch (e) { toast(`<div><b>One more click</b><div class="mutedt sm">Chrome needs a fresh click after the permission prompt.</div></div><button class="btn" data-place>Place on monitor</button>`, 15000, 'place'); }
+  try { await root.requestFullscreen({ screen: o, navigationUI: 'hide' }); }
+  catch (e) { note('<b>One more click</b><span class="mutedt">Chrome needs a fresh click after the permission prompt.</span><button class="btn sm" data-place>Place on monitor</button>', 15000); }
 }
-// big, subtle "Screen 2 · Team" label for a few seconds so it's obvious which window goes where
 function showScreenLabel() {
   document.querySelectorAll('.scrlabel').forEach((x) => x.remove());
   const el = document.createElement('div'); el.className = 'scrlabel'; el.setAttribute('aria-hidden', 'true');
-  el.innerHTML = `<b>${SCR}</b><span>Screen ${SCR} · ${esc(SEC ? roleName() : 'Command')}</span>`;
+  el.innerHTML = `<b>${SCR}</b><span>${POS_NAME[posOf(SCR)]} screen${SCR === 1 ? ' · core' : ''}</span>`;
   document.body.appendChild(el); setTimeout(() => el.remove(), 4600);
 }
 function fsAsk() {
   if ($('#fsask') || isFs()) return;
-  document.body.insertAdjacentHTML('beforeend', `<div class="nmodal" id="fsask"><div class="panel mbox" style="text-align:center;width:min(30rem,100%)"><h3 class="ph" style="justify-content:center"><span style="font-family:var(--font-hd);letter-spacing:.14em;text-transform:uppercase;color:var(--acc2)">Screen ${SCR} · ${esc(roleName())}</span></h3>
-   <p class="mutedt" style="margin-bottom:1rem">Click below to fill ${canPlace() && (lsGet(ASSIGN_KEY) || {})[SCR] ? 'its monitor' : 'this monitor'}.</p><button class="btn" data-fsgo style="font-size:1.2rem;padding:.9rem 1.6rem">${ic('full', 18, 'currentColor', 2)} Full screen</button>
-   <div style="margin-top:.8rem"><button class="lnkbtn" data-fsno>Not now</button></div></div></div>`);
+  document.body.insertAdjacentHTML('beforeend', `<div class="fsask" id="fsask"><button class="btn" data-fsgo>${ic('full', 18, 'currentColor', 2)} Fill this screen</button><button class="lnkbtn" data-fsno>Not now</button></div>`);
 }
-function screenClicks(e) {
-  const t = e.target.closest('[data-fullscreen],[data-place],[data-settings],[data-fsgo],[data-fsno],[data-tipx],[data-pref],[data-perfretry],[data-twowin],[data-setup],[data-openmore],[data-openscr],[data-ident]');
-  if (!t) return;
-  if (t.hasAttribute('data-fullscreen')) toggleFs();
-  else if (t.hasAttribute('data-place')) { hideToast(); placeOnOther(); }
-  else if (t.hasAttribute('data-settings')) openSettings();
-  else if (t.hasAttribute('data-fsgo')) { $('#fsask') && $('#fsask').remove(); goFull(); }
-  else if (t.hasAttribute('data-fsno')) { $('#fsask') && $('#fsask').remove(); }
-  else if (t.hasAttribute('data-tipx')) hideToast();
-  else if (t.hasAttribute('data-perfretry')) { localStorage.removeItem(AUTO_KEY); if (N3) N3.setMode('smooth', { auto: true, lowDpr: false }); openSettings(); }
-  else if (t.hasAttribute('data-twowin')) { setPref({ wide: 'off' }); hideToast(); setupScreens(); }
-  else if (t.hasAttribute('data-setup')) { if ($('#modal')) $('#modal').innerHTML = ''; setupScreens(); }
-  else if (t.hasAttribute('data-openmore')) { hideToast(); openPending(); }
-  else if (t.hasAttribute('data-openscr')) openOne(+t.getAttribute('data-openscr'));
-  else if (t.hasAttribute('data-ident')) { showScreenLabel(); chan.postMessage({ t: 'ident' }); }
-}
-document.addEventListener('change', (e) => { const t = e.target.closest('[data-pref]'); if (!t) return; const k = t.getAttribute('data-pref'); setPref({ [k]: t.type === 'checkbox' ? t.checked : t.value }); });
-function setPref(p) {
-  const next = Object.assign(prefs(), p); lsSet(PREFS_KEY, next);
-  if (p.perf) localStorage.removeItem(AUTO_KEY);
-  applyPrefs(true); chan.postMessage({ t: 'prefs' });
-  if ($('#modal .settings')) openSettings();
-}
-function applyPrefs(local) {
-  const p = prefs(), root = document.documentElement;
-  root.classList.toggle('glass', !!p.glass);
-  if (N3) {
-    if (p.perf === 'auto') { const a = lsGet(AUTO_KEY); if (!local || N3.state.modeAuto === false) N3.setMode(a && a.mode ? a.mode : 'smooth', { auto: true, lowDpr: !!(a && a.lowDpr) }); }
-    else N3.setMode(p.perf, { auto: false });
-    N3.setWide(p.wide);
-  }
-  if (unlocked()) render(); else applyRole();
-}
-window.addEventListener('storage', (e) => {
-  if (e.key === PREFS_KEY) applyPrefs(false);
-  if (e.key === LS.pass) { if (!e.newValue && unlocked()) lock(); else if (e.newValue && !unlocked()) autoUnlock(); } // lock / unlock every screen together
-});
-function openSettings() {
-  const p = prefs(), s = N3 ? N3.state : null, auto = lsGet(AUTO_KEY), nMon = screenSD ? screenSD.screens.length : 0;
-  const opt = (name, val, cur, title, desc) => `<label class="opt ${String(cur) === val ? 'on' : ''}"><input type="radio" name="${name}" value="${val}" data-pref="${name}" ${String(cur) === val ? 'checked' : ''}><div><b>${title}</b><div class="mutedt sm">${desc}</div></div></label>`;
-  const chk = (key, title, desc) => `<label class="opt ${p[key] ? 'on' : ''}"><input type="checkbox" data-pref="${key}" ${p[key] ? 'checked' : ''}><div><b>${title}</b><div class="mutedt sm">${desc}</div></div></label>`;
-  const now = !s ? '3D is off on this device' : s.lite ? `This screen draws only small holograms (${s.fps} fps). The 3D core runs on screen 1.` : `Right now: ${MODE_NAME[s.mode]}${s.lowDpr ? ' at 1x resolution' : ''} · ${s.fps} fps drawn${s.busyFps ? ` · ${s.busyFps} fps while moving` : ''}`;
-  const dropped = p.perf === 'auto' && auto && auto.mode === 'minimal';
-  const open = [1, 2, 3].filter(alive).length;
-  document.getElementById('modal') || document.body.insertAdjacentHTML('beforeend', '<div id="modal"></div>');
-  $('#modal').innerHTML = `<div class="nmodal" data-mclose><div class="panel mbox settings" role="dialog" aria-modal="true" aria-label="Settings">
-   <div class="ph"><h3>Settings<small>this device</small></h3><button class="x" data-mclose aria-label="Close">✕</button></div>
-   <div class="sgroup"><div class="label">Screens</div>
-    ${opt('screens', 'auto', p.screens, 'Auto (recommended)', `Spreads NOVA over the windows you have open (${open} open now)${nMon ? ` · ${nMon} monitor${nMon === 1 ? '' : 's'} found` : ''}.`)}
-    ${opt('screens', '1', p.screens, '1 screen', 'Everything on one screen, like before.')}
-    ${opt('screens', '2', p.screens, '2 screens', 'Screen 1 Command · screen 2 Team plus Build & Business.')}
-    ${opt('screens', '3', p.screens, '3 screens', 'Screen 1 Command · screen 2 Team · screen 3 Build & Business.')}
-    <ol class="steps"><li>On your main monitor, click <b>Set up screens</b>${canPlace() ? ' and allow “Window management” once' : ''}.</li><li>Click <b>Full screen</b> on each new window (or press <kbd class="k">F11</kbd>).</li><li>${canPlace() ? 'If a window lands on the wrong monitor, click <b>Place on monitor</b> on it, or drag it over.' : 'Drag each window to its monitor first. The big number shows which screen is which.'}</li></ol>
-    <div class="btns">${SEC ? (canPlace() ? '<button class="btn sm" data-place>Place on monitor</button>' : '') : '<button class="btn sm" data-setup>Set up screens</button>'}<button class="btn sm" data-ident>Identify screens</button><button class="btn sm" data-fullscreen>${isFs() ? 'Exit full screen' : 'Full screen'}</button></div>
-    <details class="adv"><summary>One window stretched across two monitors</summary>
-     ${opt('wide', 'auto', p.wide, 'Only if it really spans both (default)', 'Separate windows fit far better: each fills its own screen.')}
-     ${opt('wide', 'off', p.wide, 'Never stretch', 'Always the normal layout, even in one very wide window.')}
-     ${opt('wide', 'on', p.wide, 'Stretched across both', 'One window, Team and Build on the right half. Fits badly when the screens differ in size or height.')}
-    </details>
-   </div>
-   <div class="sgroup"><div class="label">Performance</div>
-    ${opt('perf', 'auto', p.perf, 'Smooth (recommended)', 'Lighter glow, full speed only while you move things. Switches itself to Minimal if your computer struggles.')}
-    ${opt('perf', 'full', p.perf, 'Full effects', 'Bloom glow, sharper edges, faster idle animation. Needs a strong graphics card.')}
-    ${opt('perf', 'minimal', p.perf, 'Minimal', 'No 3D background, a still core and still holograms. The lightest option.')}
-    <div class="mutedt sm" style="margin-top:.5rem">${esc(now)}${dropped ? ' · <button class="lnkbtn" data-perfretry>Try Smooth again</button>' : ''}</div>
-    ${chk('glass', 'Frosted glass blur', 'Blurs the 3D scene behind every panel. Looks nice, but it’s the slowest effect.')}
-    ${chk('fps', 'Show frame rate', 'Adds a small fps counter to the top bar.')}
-   </div>
-   <div class="btns" style="margin-top:1rem"><button class="btn" data-mclose>Done</button></div></div></div>`;
-}
-// toasts
-let toastTm = 0;
-function toast(html, ms = 9000, id = '') {
-  hideToast();
-  document.body.insertAdjacentHTML('beforeend', `<div class="ntoast" id="ntoast" role="status" data-id="${id}">${html}<button class="x" data-tipx aria-label="Dismiss">✕</button></div>`);
-  clearTimeout(toastTm); if (ms) toastTm = setTimeout(hideToast, ms);
-}
-function hideToast(id) { const t = $('#ntoast'); if (t && (!id || t.dataset.id === id)) t.remove(); }
-function firstTips() {
-  const k = 'nova.tip.fs.' + SCR;
-  if (isFs() || lsGet(k) || $('#fsask')) return;
-  lsSet(k, 1);
-  toast(`<div><b>Tip</b> <span class="mutedt">Press <kbd class="k">F11</kbd> or click <b>Full screen</b> to hide the browser bars.${SEC ? '' : ' More monitors? Click <b>Set up screens</b> to spread NOVA over two or three.'}</span></div><button class="btn" data-fullscreen>Full screen</button>`, 14000, 'fs');
-}
-function wideTip() {
-  if (lsGet('nova.tip.wide')) return; lsSet('nova.tip.wide', 1);
-  toast(`<div><b>Stretched over two screens</b><div class="mutedt sm">NOVA fits much better as two windows, one per monitor.</div></div><button class="btn" data-twowin>Use two windows</button>`, 20000, 'wide');
-}
-// stretched mode: split where the monitors actually meet instead of assuming two equal halves
-function wideSplit() {
-  const root = document.documentElement;
-  if (root.getAttribute('data-n3d-layout') !== 'wide' || SEC) { root.style.removeProperty('--split-a'); return; }
-  const vx = window.screenX + Math.max(0, (window.outerWidth - window.innerWidth) / 2);
-  let edge = null;
-  if (screenSD && screenSD.screens) { const first = screenSD.screens.find((s) => vx >= s.left && vx < s.left + s.width); if (first) edge = first.left + first.width - vx; }
-  else if (window.screen) { const sl = screen.availLeft ?? 0; edge = vx >= sl ? sl + screen.width - vx : sl - vx; }
-  if (edge && edge > innerWidth * 0.25 && edge < innerWidth * 0.75) root.style.setProperty('--split-a', Math.round(edge) + 'px'); else root.style.removeProperty('--split-a');
-}
-window.addEventListener('resize', wideSplit);
-if (N3) {
-  document.addEventListener('nova:perf', (e) => {
-    const d = e.detail;
-    if (d.auto) lsSet(AUTO_KEY, { mode: d.mode, lowDpr: d.lowDpr });
-    if (d.reason === 'minimal') toast(`<div><b>Switched to Minimal effects</b><div class="mutedt sm">The 3D scene was running at ${d.fps} fps on this computer, so NOVA turned it down to stay smooth.</div></div><button class="btn" data-settings>Settings</button>`, 15000, 'perf');
-  });
-  setInterval(() => { const f = $('[data-fps]'); if (f) f.textContent = fpsText(N3.state); }, 1000);
-}
-screenDetails(false).then(() => wideSplit()); // no prompt: only if already allowed
 
 // ---------- lock / unlock ----------
 let timers = [];
+const unlocked = () => !!window.__novaShown && $('#lock').hidden;
 function startLive() {
   stopLive();
   timers.push(setInterval(tickAgo, 30000));
   if (SEC) {
-    // screens 2 and 3 get their data from screen 1; they only fetch the public feeds themselves when screen 1 isn't open
+    // screens 2 and 3 get their data from screen 1; they fetch the public feeds themselves only when screen 1 isn't open
     chan.postMessage({ t: 'hello', s: SCR });
     timers.push(setTimeout(() => { if (!relayAlive()) { refreshGitHub(); checkCalo(); } }, 4000));
     timers.push(setInterval(() => { if (!relayAlive()) { refreshGitHub(); checkCalo(); refreshStatus(); } }, REFRESH_MS));
@@ -1286,35 +974,34 @@ function startLive() {
   }
   refreshGitHub(); checkCalo();
   timers.push(setInterval(() => { refreshGitHub(); checkCalo(); refreshStatus(); }, REFRESH_MS));
-  timers.push(setInterval(() => { if (document.visibilityState === 'visible') refreshConnAll(); }, 90000));
-  document.addEventListener('visibilitychange', onVis);
+  timers.push(setInterval(() => { if (conn.session || localStorage.getItem(LS.pass)) pollInbox(); }, INBOX_MS));       // Chat replies
+  timers.push(setInterval(() => { if (document.visibilityState === 'visible') refreshConnAll(); }, 120000)); // connections + agent lists
 }
-function stopLive() { timers.forEach((t) => { clearInterval(t); clearTimeout(t); }); timers = []; document.removeEventListener('visibilitychange', onVis); }
-function onVis() { if (document.visibilityState === 'visible') { refreshGitHub(); checkCalo(); if (Date.now() - state.statusLoadedAt > 60000) refreshStatus(); } }
+function stopLive() { timers.forEach((t) => { clearInterval(t); clearTimeout(t); }); timers = []; }
 function lock(msg) {
-  n3d.shown = false; apiLogout(); conn.cursor = undefined; conn.copilot = undefined; if ($('#modal')) $('#modal').innerHTML = '';
-  localStorage.removeItem(LS.pass); keyCache.clear(); state.status = null; relayAt = 0; stopLive(); reset3D();
-  $('#sheet').innerHTML = '';
-  ['#view', '#s2bar', ...Object.keys(FILL).map((k) => '#x-' + k)].forEach((k) => { const el = $(k); if (el) { el.innerHTML = ''; el.__html = ''; } });
-  if (N3) { if (SEC) N3.back(); N3.setPaused(true); } hideToast(); $('#fsask') && $('#fsask').remove();
-  $('#lock').hidden = false; $('#screen').setAttribute('aria-hidden', 'true');
-  const m = $('#lockmsg'); m.textContent = msg || 'Locked. Enter your passphrase to open NOVA.'; m.className = 'lockmsg' + (msg ? ' err' : '');
+  window.__novaShown = false; apiLogout(); conn.cursor = undefined; conn.copilot = undefined; closeModal(); closeMenu();
+  localStorage.removeItem(LS.pass); keyCache.clear(); state.status = null; relayAt = 0; stopLive();
+  if (!SEC) { localStorage.removeItem(LS.sent); localStorage.removeItem(LS.draft); }
+  $('#tiles').replaceChildren(); root.classList.remove('has-tiles'); tileSig = '';
+  if (N3) { N3.setPaused(true); N3.setUnread('chat', 0); }
+  hideNote(); $('#fsask') && $('#fsask').remove();
+  root.classList.add('locked'); $('#lock').hidden = false; $('#stage').setAttribute('aria-hidden', 'true'); $('#menuBtn').hidden = true;
+  const m = $('#lockmsg'); m.textContent = msg || (SEC ? 'Unlock NOVA on screen 1, or enter your passphrase here.' : 'Locked. Enter your passphrase to open NOVA.'); m.className = 'lockmsg' + (msg ? ' err' : '');
   $('#pass').value = ''; setTimeout(() => $('#pass').focus(), 50);
 }
 const SETUP = new URLSearchParams(location.search).get('setup') === '1';
 if (SETUP) { const u = new URL(location.href); u.searchParams.delete('setup'); history.replaceState(null, '', u.href); }
 function showApp() {
-  n3d.shown = true; $('#lock').hidden = true; $('#screen').removeAttribute('aria-hidden'); if (N3) N3.setPaused(false);
-  route(); startLive();
+  window.__novaShown = true; root.classList.remove('locked'); $('#lock').hidden = true; $('#stage').removeAttribute('aria-hidden'); $('#menuBtn').hidden = false;
+  if (N3) N3.setPaused(false);
+  render(); startLive();
   if (SEC) { showScreenLabel(); if (SETUP && !isFs()) fsAsk(); }
-  setTimeout(firstTips, 1500);
 }
-// another screen unlocked NOVA: reuse the stored passphrase here too
 async function autoUnlock() {
   const pass = localStorage.getItem(LS.pass); if (!pass || unlocked()) return;
   try { state.status = await fetchStatus(pass); state.statusErr = ''; state.statusLoadedAt = Date.now(); showApp(); if (!SEC) apiLogin(pass).then(refreshConnAll); } catch (e) {}
 }
-$('#lockring').innerHTML = coreRing([{ state: 'ok' }, { state: 'ok' }, { state: 'ok' }], false);
+$('#lockring').innerHTML = coreRing();
 $('#lockform').addEventListener('submit', async (e) => {
   e.preventDefault();
   const pass = normPass($('#pass').value), btn = $('#go'), m = $('#lockmsg');
@@ -1329,21 +1016,17 @@ $('#lockform').addEventListener('submit', async (e) => {
     m.textContent = err instanceof WrongPass ? 'That passphrase didn’t work. Check the words and dashes.' : 'Couldn’t reach the status file. Check your connection.';
   } finally { btn.disabled = false; btn.textContent = 'Unlock'; }
 });
+window.addEventListener('nova:conn', () => { if (unlocked()) { render(); noticeReplies(); } });
 
-// boot
-if (N3) { try { N3.init(); } catch (e) { console.warn('NOVA 3D unavailable:', e.message); } }
-document.documentElement.classList.toggle('glass', !!prefs().glass);
-setInterval(tick, 1000);
+// ---------- boot ----------
+redrawGrid(true); syncScan(); tick(); setInterval(tick, 1000); beat();
+load3D();
 (async () => {
-  applyRole();
   const pass = localStorage.getItem(LS.pass);
   if (!pass) { lock(); $('#lockmsg').className = 'lockmsg'; $('#lockmsg').textContent = SEC ? 'Unlock NOVA on screen 1, or enter your passphrase here.' : 'Remembered on this device until you press Lock.'; if (SEC) showScreenLabel(); return; }
   showApp();
   if (!SEC) refreshConnAll();
   await refreshStatus();
 })();
-window.addEventListener('nova:conn', () => { if (unlocked()) render(); });
-
-if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW', e.message)));
-
-window.addEventListener('pageshow', () => { closing = false; beat(); });
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch((e) => console.info('SW', e.message)));
+window.NOVA.pollNow = () => (SEC ? chan.postMessage({ t: 'pollnow' }) : pollInbox());

@@ -11,7 +11,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="NOVA">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.github.com https://tyler467890.github.io https://nova-api.tyler467890.workers.dev; manifest-src 'self'; worker-src 'self'; base-uri 'self'; form-action 'none'; object-src 'none'">
-<title>NOVA · Command Center</title>
+<title>NOVA</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="icons/logo.svg">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
@@ -23,39 +23,27 @@
 <link rel="stylesheet" href="css/nova.css">
 </head>
 <body>
-<div class="screen" id="screen">
-  <!-- 3D layer (3d/nova-3d.min.js): full-screen three.js canvas behind every panel -->
-  <canvas id="nova-3d" aria-hidden="true"></canvas>
-  <div class="s1" id="s1">
-    <header class="topbar layer" id="topbar"></header>
-    <main class="view" id="view"></main>
-  </div>
-  <!-- Screens 2 and 3 (own windows via ?screen=2 / ?screen=3, or the right half of one stretched window).
-       data-role on <html> picks which panels show: team (screen 2 of 3), build (screen 3), merged (screen 2 of 2). -->
-  <aside class="s2 layer" id="s2" aria-label="NOVA screen">
-    <header class="topbar s2bar" id="s2bar"></header>
-    <div class="grid2" id="grid2">
-      <section class="panel p-agents" data-area="team"><div id="x-agents" class="s2fill"></div></section>
-      <section class="panel p-detail" data-n3d-detail-slot><div id="x-detail" class="s2fill"></div></section>
-      <section class="panel p-logs"><div id="x-logs" class="s2fill"></div></section>
-      <section class="panel p-code"><div id="x-code" class="s2fill"></div></section>
-      <section class="panel p-gh" data-area="github"><div id="x-gh" class="s2fill"></div></section>
-      <section class="p-calo" data-area="calo">
-        <div class="bay" data-n3d-bay><div class="baylbl"><span class="label">Calo hologram</span><span class="mutedt sm" id="x-baylbl">Calo · phone + guide preview</span></div><i class="c1"></i><i class="c2"></i><i class="c3"></i><i class="c4"></i></div>
-        <div class="panel calostat"><div id="x-calo" class="s2fill"></div></div>
-      </section>
-      <section class="panel p-tasks" data-area="tasks"><div id="x-tasks" class="s2fill"></div></section>
-      <section class="panel p-biz" data-area="business"><div id="x-biz" class="s2fill"></div></section>
-      <section class="panel p-dock"><div id="x-dock" class="dockrow"></div></section>
-    </div>
-  </aside>
-  <nav class="tabs" id="tabs" aria-label="Sections"></nav>
-</div>
+<!-- NOVA 2: every screen is the same empty grid. Screen 1 adds the 3D core; everything else lives in the core's nodes
+     and opens as tabs that can be thrown to the left, centre or right screen. -->
+<canvas id="grid" aria-hidden="true"></canvas>
+<div class="scan" aria-hidden="true"></div>
+<main id="stage">
+  <section id="coreArea" data-n3d-core aria-label="NOVA core: drag to rotate, scroll to zoom, pick a node to open it">
+    <div class="corepool" aria-hidden="true"></div>
+    <div class="clock" aria-hidden="true"><b data-clock></b><span data-ampm></span></div>
+    <nav class="corenav" id="corenav" aria-label="Open a tab"></nav>
+  </section>
+  <section id="tiles" aria-label="Open tabs"></section>
+</main>
+<div class="edge l" id="edgeL" aria-hidden="true"><span></span></div>
+<div class="edge r" id="edgeR" aria-hidden="true"><span></span></div>
+<button class="menubtn" id="menuBtn" type="button" aria-label="NOVA menu" aria-haspopup="true" aria-expanded="false" hidden></button>
+<div class="menu" id="menu" role="menu" hidden></div>
 <div class="lock" id="lock" hidden>
   <div class="lockbox">
     <div class="lockring" id="lockring"></div>
     <div class="name">NOVA</div>
-    <div class="label">Command center · locked</div>
+    <div class="label" id="locksub">Command center · locked</div>
     <form id="lockform" autocomplete="on">
       <input type="text" name="username" value="tyler" autocomplete="username" hidden>
       <input id="pass" name="password" type="password" placeholder="Enter passphrase" autocomplete="current-password" autocapitalize="none" autocorrect="off" spellcheck="false" aria-label="Passphrase" required>
@@ -64,8 +52,6 @@
     <div class="lockmsg" id="lockmsg">Remembered on this device until you press Lock.</div>
   </div>
 </div>
-<div id="sheet"></div>
-<script src="3d/nova-3d.min.js" defer></script>
 <script type="module" src="js/app.js"></script>
 </body>
 </html>
