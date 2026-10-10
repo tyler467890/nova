@@ -4,6 +4,7 @@
 //   SESSION_KEY           HMAC key for 12h session tokens
 //   INBOX_KEY             bearer key the Grok Bot uses for POST /inbox/result
 //   GITHUB_TOKEN, CURSOR_API_KEY, GROK_WEBHOOK_URL, GROK_WEBHOOK_KEY, NOTION_TOKEN, NOTION_TASKS_DB (optional integrations)
+//   BRIGHTSPACE_ICAL_URL  private NSCC Brightspace calendar feed (.ics) for GET /school/assignments
 
 const SESSION_TTL = 12 * 3600;            // seconds
 const LOGIN_MAX = 5, LOGIN_WINDOW = 900;  // 5 wrong tries per 15 minutes per IP (IPv6: per /48)
@@ -264,6 +265,127 @@ async function notionTasks(env) {
   return { tasks };
 }
 
+// ---------- School: Brightspace calendar feed (iCal) ----------
+// The feed URL is a secret (it carries a private token). Parsed items are cached in KV for 30 minutes; the URL never leaves the Worker.
+const SCHOOL_TTL = 30 * 60 * 1000, SCHOOL_RECENT_DAYS = 30, SCHOOL_AHEAD_DAYS = 180;
+const BS_HOST = /(^|\.)brightspace\.com$/i;
+function icsUnescape(v) { return String(v).replace(/\\([\\;,nN])/g, (_, c) => (c === 'n' || c === 'N' ? '\n' : c)); }
+// UTC offset (minutes) of a time zone at a given instant
+function tzOffset(tz, ms) {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(new Date(ms));
+  const g = (t) => +parts.find((p) => p.type === t).value;
+  return (Date.UTC(g('year'), g('month') - 1, g('day'), g('hour'), g('minute'), g('second')) - Math.floor(ms / 1000) * 1000) / 60000;
+}
+// wall-clock time in `tz` -> epoch ms (two passes to settle across DST changes)
+function zonedToUtc(y, mo, d, h, mi, s, tz) {
+  const guess = Date.UTC(y, mo - 1, d, h, mi, s);
+  let ms = guess - tzOffset(tz, guess) * 60000;
+  ms = guess - tzOffset(tz, ms) * 60000;
+  return ms;
+}
+const validTz = (tz) => { try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; } catch { return false; } };
+// -> { ms, allDay, date } ; date is YYYY-MM-DD for all-day values
+function icsDate(value, params) {
+  const v = String(value || '').trim();
+  let m = v.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (m || params.VALUE === 'DATE') {
+    m = m || v.match(/^(\d{4})(\d{2})(\d{2})/); if (!m) return null;
+    // an all-day item counts as due at the end of that day, Halifax time
+    return { ms: zonedToUtc(+m[1], +m[2], +m[3], 23, 59, 0, TZ), allDay: true, date: `${m[1]}-${m[2]}-${m[3]}` };
+  }
+  m = v.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(Z)?$/); if (!m) return null;
+  const [y, mo, d, h, mi, s = '0'] = m.slice(1, 7).map((x) => +x || 0);
+  if (m[7]) return { ms: Date.UTC(y, mo - 1, d, h, mi, s), allDay: false };
+  let tz = String(params.TZID || '').replace(/^"|"$/g, '').replace(/^\/[^/]*\//, '');
+  if (!tz || !validTz(tz)) tz = TZ; // floating times (or an unknown zone) are read as Halifax time
+  return { ms: zonedToUtc(y, mo, d, h, mi, s, tz), allDay: false };
+}
+function parseIcs(text) {
+  const lines = String(text || '').replace(/\r\n?/g, '\n').replace(/\n[ \t]/g, '').split('\n'); // unfold folded lines
+  const events = []; let cur = null, calName = '';
+  for (const line of lines) {
+    if (line === 'BEGIN:VEVENT') { cur = {}; continue; }
+    if (line === 'END:VEVENT') { if (cur) events.push(cur); cur = null; continue; }
+    const i = line.search(/[:;]/); if (i < 1) continue;
+    const name = line.slice(0, i).toUpperCase();
+    // params up to the first ':' that isn't inside quotes
+    let j = i, q = false; for (; j < line.length; j++) { const c = line[j]; if (c === '"') q = !q; else if (c === ':' && !q) break; }
+    const params = {}; line.slice(i, j).split(';').slice(1).forEach((p) => { const k = p.indexOf('='); if (k > 0) params[p.slice(0, k).toUpperCase()] = p.slice(k + 1); });
+    const value = line.slice(j + 1);
+    if (!cur) { if (name === 'X-WR-CALNAME') calName = icsUnescape(value); continue; }
+    if (!(name in cur)) cur[name] = { value, params };
+  }
+  return { calName, events };
+}
+const bsUrl = (u) => { try { const x = new URL(u); return x.protocol === 'https:' && BS_HOST.test(x.hostname) ? x.href : ''; } catch { return ''; } };
+function schoolItem(ev) {
+  const val = (k) => (ev[k] ? icsUnescape(ev[k].value) : '');
+  const start = ev.DTSTART ? icsDate(ev.DTSTART.value, ev.DTSTART.params) : null;
+  const end = ev.DTEND ? icsDate(ev.DTEND.value, ev.DTEND.params) : null;
+  const due = end && start && !start.allDay ? (end.ms >= start.ms ? end : start) : start || end; // Brightspace due items have DTSTART = DTEND
+  if (!due) return null;
+  const summary = val('SUMMARY').trim();
+  const km = summary.match(/\s+-\s+(Due|Available|Availability Ends|Start Date|End Date|Starts|Ends)$/i);
+  const title = km ? summary.slice(0, km.index).trim() : summary;
+  // NSCC LOCATION looks like "WEBD1000/2795/Website Development(B)/Kristiansen,David"
+  const loc = val('LOCATION').trim(), parts = loc.split('/');
+  let course = null;
+  if (parts.length >= 3 && /^[A-Z]{2,6}\s?\d{3,5}[A-Z]?$/i.test(parts[0].trim())) {
+    const raw = parts[2].trim(), sm = raw.match(/^(.*?)\s*\(([A-Z0-9]{1,3})\)$/);
+    course = { code: parts[0].trim(), name: sm ? sm[1] : raw, section: sm ? sm[2] : '', instructor: (parts[3] || '').split(',').reverse().join(' ').trim() };
+  } else if (loc) course = { code: '', name: loc, section: '', instructor: '' };
+  let desc = val('DESCRIPTION');
+  let url = bsUrl(val('URL'));
+  const vm = desc.match(/View event - (https:\/\/\S+)/); if (!url && vm) url = bsUrl(vm[1]);
+  desc = desc.replace(/\n*View event - https:\/\/\S+\s*$/, '').replace(/\n{3,}/g, '\n\n').trim();
+  const om = (url || desc).match(/[?&]ou=(\d{1,10})/);
+  if (course && om) course.ou = om[1];
+  return {
+    id: val('UID').slice(0, 120) || summary.slice(0, 120), title: title.slice(0, 300), kind: km ? km[1].replace(/\b\w/g, (c) => c.toUpperCase()) : '',
+    due: new Date(due.ms).toISOString().replace(/\.\d{3}Z$/, 'Z'), allDay: !!due.allDay, ...(due.allDay ? { date: due.date } : {}),
+    course, description: desc.slice(0, 2000), url,
+  };
+}
+async function schoolFetch(env) {
+  let u; try { u = new URL(env.BRIGHTSPACE_ICAL_URL); } catch { fail(503, 'not_configured', { configured: false, need: 'BRIGHTSPACE_ICAL_URL' }); }
+  if (u.protocol !== 'https:' || !BS_HOST.test(u.hostname)) fail(503, 'not_configured', { configured: false, need: 'BRIGHTSPACE_ICAL_URL' });
+  let r; try { r = await fetch(u.href, { headers: { 'User-Agent': 'nova-api', Accept: 'text/calendar' }, redirect: 'follow' }); } catch { fail(502, 'brightspace_error', { status: 0 }); }
+  if (!r.ok) fail(502, 'brightspace_error', { status: r.status });
+  const text = await r.text();
+  if (!/BEGIN:VCALENDAR/.test(text.slice(0, 2000))) fail(502, 'brightspace_error', { status: r.status, detail: 'not a calendar' });
+  const { calName, events } = parseIcs(text.slice(0, 2 * 1024 * 1024));
+  const items = events.map(schoolItem).filter(Boolean);
+  return { at: Date.now(), calendar: calName.slice(0, 200), items };
+}
+async function schoolAssignments(env, url) {
+  need(env, 'BRIGHTSPACE_ICAL_URL');
+  let c = await kvJson(env, 'school:bs', null), stale = false, err = null;
+  const fresh = url.searchParams.get('fresh') === '1' && (!c || Date.now() - c.at > 2 * 60 * 1000); // forced refresh at most every 2 min
+  if (!c || fresh || Date.now() - c.at > SCHOOL_TTL) {
+    try { c = await schoolFetch(env); await env.NOVA_KV.put('school:bs', JSON.stringify(c), { expirationTtl: 7 * 86400 }); }
+    catch (e) { if (!c) throw e; stale = true; err = (e.body && e.body.error) || 'brightspace_error'; } // serve the last good copy
+  }
+  const now = Date.now(), lo = now - SCHOOL_RECENT_DAYS * 864e5, hi = now + SCHOOL_AHEAD_DAYS * 864e5;
+  const t = (x) => Date.parse(x.due);
+  const items = c.items.map((x) => ({ ...x, due: String(x.due).replace(/\.\d{3}Z$/, 'Z') })).filter((x) => t(x) >= lo && t(x) <= hi).sort((a, b) => t(a) - t(b) || a.title.localeCompare(b.title));
+  const upcoming = items.filter((x) => t(x) >= now), recent = items.filter((x) => t(x) < now).reverse();
+  const within = (d) => upcoming.filter((x) => t(x) <= now + d * 864e5 && /^(due|)$/i.test(x.kind)).length;
+  const courses = {}; c.items.forEach((x) => { if (x.course && x.course.code && !courses[x.course.code]) courses[x.course.code] = x.course; });
+  return {
+    source: 'brightspace', calendar: c.calendar, fetchedAt: new Date(c.at).toISOString(), stale, ...(err ? { error: err } : {}),
+    timezone: TZ, now: new Date(now).toISOString(),
+    counts: { total: c.items.length, upcoming: upcoming.length, recent: recent.length, due_3d: within(3), due_7d: within(7), due_14d: within(14) },
+    courses: Object.values(courses).sort((a, b) => a.code.localeCompare(b.code)),
+    upcoming, recent,
+  };
+}
+// The bot (NOVA command intake) may read assignments with the INBOX_KEY instead of a session. Read-only, this route only.
+async function schoolAuth(req, env) {
+  const m = (req.headers.get('Authorization') || '').match(/^Bearer (.+)$/);
+  if (m && env.INBOX_KEY && !m[1].includes('.') && timingSafeEq(m[1], env.INBOX_KEY)) return 'bot';
+  await verifySession(req, env); return 'session';
+}
+
 // ---------- status ----------
 async function status(env) {
   const has = (...n) => n.every((k) => !!env[k]);
@@ -276,6 +398,7 @@ async function status(env) {
       grok: { configured: has('GROK_WEBHOOK_URL', 'GROK_WEBHOOK_KEY'), need: ['GROK_WEBHOOK_URL', 'GROK_WEBHOOK_KEY'] },
       notion: { configured: has('NOTION_TOKEN', 'NOTION_TASKS_DB'), need: ['NOTION_TOKEN', 'NOTION_TASKS_DB'] },
       inbox: { configured: has('INBOX_KEY'), need: ['INBOX_KEY'] },
+      brightspace: { configured: has('BRIGHTSPACE_ICAL_URL'), need: ['BRIGHTSPACE_ICAL_URL'] },
     },
     controls_off: (await env.NOVA_KV.get('controls_off')) === '1',
     repos: allowlist(env),
@@ -327,6 +450,7 @@ async function route(req, env, url) {
   if (p === '/health' && m === 'GET') return { ok: true, service: 'nova-api', time: new Date().toISOString() };
   if (p === '/auth/login' && m === 'POST') return login(req, env);
   if (p === '/inbox/result' && m === 'POST') return inboxResult(req, env);
+  if (p === '/school/assignments') { if (m !== 'GET') fail(405, 'method_not_allowed'); await schoolAuth(req, env); return schoolAssignments(env, url); }
 
   // Everything below needs a valid session.
   const known = /^\/(status|audit|inbox|controls|github\/issue|github\/copilot-tasks|cursor\/agents(\/[^/]+(\/followup)?)?|grok\/command|notion\/tasks)$/.test(p);

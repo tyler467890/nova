@@ -21,6 +21,7 @@ export const INTEGS = [
   ['github', 'GitHub', 'Create issues in your repos'],
   ['notion', 'Notion', 'Live task list from your Notion database'],
   ['inbox', 'Replies inbox', 'Where your bots post their answers'],
+  ['brightspace', 'Brightspace', 'Assignments and due dates from your NSCC calendar'],
 ];
 
 export const conn = { session: null, status: null, inbox: [], err: '', loading: false, inboxAt: 0 };

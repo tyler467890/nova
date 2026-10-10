@@ -5,12 +5,12 @@
 import { conn, api, apiLogin, apiLogout, refreshConn, pollInbox, isOn, sendDirect, confirmCommand, openConnections, connRows, modal, closeModal, TARGETS, esc } from './connect.js';
 import { drawGrid } from './grid.js';
 
-const VERSION = '2.1.0';
+const VERSION = '2.2.0';
 const REPO = 'tyler467890/student-day-planner';
 const CALO = 'https://tyler467890.github.io/student-day-planner/';
 const TZ = 'America/Halifax';
 const NOTION_TASKS = 'https://app.notion.com/p/3e6c427ef5e0803083c0d095c0f01120';
-const REFRESH_MS = 5 * 60 * 1000, INBOX_MS = 20 * 1000;
+const REFRESH_MS = 5 * 60 * 1000, INBOX_MS = 20 * 1000, SCHOOL_MS = 30 * 60 * 1000;
 const AAD = new TextEncoder().encode('nova-status:v1');
 const LS = { pass: 'nova.passphrase', gh: 'nova.github.v1', calo: 'nova.calo.v1', layout: 'nova.layout.v2', prefs: 'nova.prefs', auto: 'nova.perf.auto',
   sent: 'nova.chat.sent', seen: 'nova.chat.seen', draft: 'nova.chat.draft', target: 'nova.cmd.target', assign: 'nova.scr.assign' };
@@ -103,6 +103,10 @@ const ICONS = {
   send: '<path d="M5 14 L23 6 L17 23 L13 15 Z M13 15 L23 6"/>',
   menu: '<path d="M6 9 H22 M6 14 H22 M6 19 H22"/>',
   clear: '<path d="M7 7 L21 21 M21 7 L7 21"/>',
+  cap: '<path d="M3 11 L14 6 L25 11 L14 16 Z"/><path d="M8 13.5 V19 C8 21 20 21 20 19 V13.5 M25 11 V17"/>',
+  net: '<rect x="11" y="4" width="6" height="5" rx="1"/><rect x="3" y="19" width="6" height="5" rx="1"/><rect x="19" y="19" width="6" height="5" rx="1"/><path d="M14 9 V14 M6 19 V14 H22 V19"/>',
+  npp: '<path d="M8 4 H18 L22 8 V24 H8 Z M18 4 V8 H22"/><path d="M11 14 H15 M13 12 V16 M16 19 H20 M18 17 V21"/>',
+  rocket: '<path d="M14 3 C19 7 20 13 18 19 H10 C8 13 9 7 14 3 Z"/><circle cx="14" cy="11" r="2"/><path d="M10 19 L7 23 L10 22 M18 19 L21 23 L18 22 M12 22 L14 25 L16 22"/>',
 };
 const ic = (n, s = 24, col = 'currentColor', sw = 1.6) => `<svg width="${s}" height="${s}" viewBox="0 0 28 28" fill="none" stroke="${col}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ''}</svg>`;
 const hexIc = (n) => `<div class="ic"><svg class="hex" viewBox="0 0 52 52" fill="none"><path d="M26 2 L47 14 L47 38 L26 50 L5 38 L5 14 Z" stroke="var(--acc)" stroke-width="1.3" fill="rgba(64,214,255,.07)"/></svg>${ic(n, 28, 'var(--acc)')}</div>`;
@@ -136,16 +140,23 @@ function counts() { const a = agents(); return { total: a.length, working: a.fil
 function runState() { const r = state.gh.run; if (!r) return 'pending'; if (r.status !== 'completed') return 'warn'; return r.conclusion === 'success' ? 'ok' : 'bad'; }
 
 // ---------- tabs (the core's nodes) ----------
+// 13 nodes, spread evenly over the globe (Chat stays biggest, at the front). The three app launchers share the
+// 'tools' group: neighbouring spots on the globe, one accent colour, labelled Tools.
+const TOOLS_TINT = '#a58cff';
 const AREAS = [
-  { id: 'chat', label: 'Chat', angle: 90, primary: true, icon: 'chat' },
-  { id: 'team', label: 'AI Team', angle: 50, icon: 'users' },
-  { id: 'agents', label: 'Agents', sub: 'Cursor · Copilot', angle: 10, icon: 'cursor' },
-  { id: 'github', label: 'GitHub', angle: -30, icon: 'branch' },
-  { id: 'calo', label: 'Calo App', angle: -70, icon: 'rabbit' },
-  { id: 'tasks', label: 'Tasks', angle: -110, icon: 'check' },
-  { id: 'business', label: 'Business', sub: 'After launch', muted: true, angle: -150, icon: 'chart' },
-  { id: 'launch', label: 'Quick Launch', angle: 170, icon: 'grid' },
-  { id: 'settings', label: 'Settings', angle: 130, icon: 'gear' },
+  { id: 'chat', label: 'Chat', primary: true, icon: 'chat' },
+  { id: 'brightspace', label: 'Brightspace', sub: 'School', icon: 'cap' },
+  { id: 'team', label: 'AI Team', icon: 'users' },
+  { id: 'agents', label: 'Agents', sub: 'Cursor · Copilot', icon: 'cursor' },
+  { id: 'github', label: 'GitHub', icon: 'branch' },
+  { id: 'calo', label: 'Calo App', icon: 'rabbit' },
+  { id: 'tasks', label: 'Tasks', icon: 'check' },
+  { id: 'business', label: 'Business', sub: 'After launch', muted: true, icon: 'chart' },
+  { id: 'launch', label: 'Quick Launch', icon: 'grid' },
+  { id: 'settings', label: 'Settings', icon: 'gear' },
+  { id: 'vscode', label: 'VS Code', sub: 'Tools', group: 'tools', tint: TOOLS_TINT, icon: 'code' },
+  { id: 'npp', label: 'Notepad++', sub: 'Tools', group: 'tools', tint: TOOLS_TINT, icon: 'npp' },
+  { id: 'pt', label: 'Packet Tracer', sub: 'Tools', group: 'tools', tint: TOOLS_TINT, icon: 'net' },
 ];
 const AREA = Object.fromEntries(AREAS.map((a) => [a.id, a]));
 
@@ -227,6 +238,7 @@ function openTab(id, pos) {
   const tabs = L.tabs.filter((t) => t.id !== id); tabs.push({ id, pos: pos || defaultPos() });
   setLayout(tabs);
   if (id === 'agents' && !SEC) refreshCode();
+  if (id === 'brightspace' && !SEC && (!conn.school || Date.now() - (conn.school.at || 0) > SCHOOL_MS - 5000)) refreshSchool();
   setTimeout(() => { const el = tileEl(id); if (el) { el.classList.add('arrive'); setActive(id); } }, 0);
 }
 function sendTab(id, pos) {
@@ -307,6 +319,7 @@ const TOOLS = [
   ['branch', 'GitHub', 'https://github.com/' + REPO, 'Calo repository'],
   ['notes', 'Notion', 'https://app.notion.com', 'Notion'],
   ['rabbit', 'Calo', CALO, 'The live Calo app'],
+  ['cap', 'Brightspace', 'https://nscconline.brightspace.com/d2l/home', 'NSCC Brightspace'],
   ['spark', 'Muse', '', 'Muse link not set yet'],
 ];
 function tabLaunch() {
@@ -360,6 +373,95 @@ function tabSettings() {
     <div class="mutedt sm">Forgets the passphrase on this computer.</div></div>
    <div class="tfoot">NOVA ${VERSION} · screen ${SCR} · ${POS_NAME[posOf(SCR)]}</div>`;
 }
+
+// ---------- School: Brightspace (assignments from the NSCC calendar feed, via nova-api; grades stay in Brightspace) ----------
+const BS = 'https://nscconline.brightspace.com';
+const BS_LINKS = { home: BS + '/d2l/home', grades: BS + '/d2l/home', calendar: BS + '/d2l/le/calendar/6606' };
+const gradesUrl = (ou) => (/^\d{1,10}$/.test(String(ou || '')) ? `${BS}/d2l/lms/grades/my_grades/main.d2l?ou=${ou}` : BS_LINKS.grades);
+const bsUrl = (u) => { const x = safeUrl(u); try { return x && /(^|\.)brightspace\.com$/i.test(new URL(x).hostname) ? x : ''; } catch { return ''; } };
+const fDue = fmt({ weekday: 'short', month: 'short', day: 'numeric' });
+const openDetails = new Set(); // which expandable rows are open (kept across re-renders and screens)
+document.addEventListener('toggle', (e) => { const k = e.target && e.target.getAttribute && e.target.getAttribute('data-dk'); if (k) { if (e.target.open) openDetails.add(k); else openDetails.delete(k); } }, true);
+const dOpen = (k) => (openDetails.has(k) ? ' open' : '');
+function until(iso) { // "in 2 d 4 h", "in 5 h 12 min", "in 40 min", "due now", "3 h ago"
+  const t = Date.parse(iso); if (isNaN(t)) return '';
+  const s = Math.round((t - Date.now()) / 1000), a = Math.abs(s), d = Math.floor(a / 86400), h = Math.floor((a % 86400) / 3600), m = Math.floor((a % 3600) / 60);
+  if (a < 60) return 'due now';
+  const v = d ? `${d} d${h ? ' ' + h + ' h' : ''}` : h ? `${h} h${m ? ' ' + m + ' min' : ''}` : `${m} min`;
+  return s > 0 ? 'in ' + v : v + ' ago';
+}
+const isDue = (x) => !x.kind || /^due$/i.test(x.kind);
+function schoolItems() { const d = conn.school && conn.school.data; return d ? { up: d.upcoming || [], recent: d.recent || [], courses: d.courses || [] } : null; }
+function dueSoonCount(days = 3) { const s = schoolItems(); if (!s) return 0; const now = Date.now(), hi = now + days * 864e5; return s.up.filter((x) => { const t = Date.parse(x.due); return isDue(x) && t >= now && t <= hi; }).length; }
+function dueText(x) {
+  const d = new Date(Date.parse(x.due));
+  if (x.allDay) return fDue.format(new Date(Date.parse((x.date || '') + 'T12:00:00Z') || d)) + ' · end of day';
+  return fDue.format(d) + ' · ' + fTime.format(d) + ' ' + clockParts(d).zone;
+}
+function bsRow(x, past) {
+  const k = 'bs:' + x.id, t = Date.parse(x.due), soon = !past && t - Date.now() < 864e5, c = x.course || {}, u = bsUrl(x.url);
+  const course = [c.code, c.name].filter(Boolean).join(' · ');
+  return `<details class="bsi${past ? ' past' : ''}" data-dk="${esc(k)}"${dOpen(k)}><summary>
+    <span class="dot ${past ? 'idle' : soon ? 'warn' : ''}"></span>
+    <div class="grow"><b class="ell">${esc(x.title)}${x.kind && !isDue(x) ? ` <span class="badge dim">${esc(x.kind)}</span>` : ''}</b>
+     <div class="mutedt sm ell">${course ? esc(course) + ' · ' : ''}${esc(dueText(x))}</div></div>
+    <span class="cd ${past ? 'dimt' : soon ? 'warnc' : 'acc'}" data-until="${esc(x.due)}">${esc(until(x.due))}</span></summary>
+   <div class="bsd">${x.description ? `<div class="desc">${linkify(x.description)}</div>` : '<div class="mutedt sm">No details in the calendar. Open it in Brightspace for the full instructions.</div>'}
+    <div class="btns wrap">${u ? `<a class="btn sm" href="${esc(u)}" target="_blank" rel="noopener">Open in Brightspace ${ic('ext', 14)}</a>` : ''}${c.ou ? `<a class="btn sm" href="${esc(gradesUrl(c.ou))}" target="_blank" rel="noopener">${esc(c.code || 'Course')} grades ${ic('ext', 14)}</a>` : ''}</div></div></details>`;
+}
+function tabBrightspace() {
+  const btns = `<div class="btns wrap bsbtns"><a class="btn sm" href="${BS_LINKS.home}" target="_blank" rel="noopener">${ic('cap', 16)} Open Brightspace</a><a class="btn sm" href="${BS_LINKS.grades}" target="_blank" rel="noopener" title="Grades are kept per course in Brightspace">Grades ${ic('ext', 14)}</a><a class="btn sm" href="${BS_LINKS.calendar}" target="_blank" rel="noopener">Calendar ${ic('ext', 14)}</a></div>`;
+  const sc = conn.school, s = schoolItems();
+  if (!s) {
+    const msg = SEC && !alive(1) ? 'Open NOVA on screen 1 to load your assignments.' : sc && sc.err ? esc(sc.err) : conn.status && !isOn('brightspace') ? 'Brightspace isn’t connected yet.' : 'Loading your assignments…';
+    return btns + `<div class="empty">${msg}</div>`;
+  }
+  const now = Date.now(), today = fYmd.format(new Date()), wk = now + 7 * 864e5, hi = now + 14 * 864e5;
+  const soon = s.up.filter((x) => Date.parse(x.due) <= hi), later = s.up.length - soon.length;
+  const groups = [['Today', soon.filter((x) => fYmd.format(new Date(Date.parse(x.due))) === today)], ['This week', []], ['Later', []]];
+  soon.forEach((x) => { if (groups[0][1].includes(x)) return; (Date.parse(x.due) <= wk ? groups[1][1] : groups[2][1]).push(x); });
+  const n3 = dueSoonCount(3), d = conn.school.data;
+  const list = soon.length ? groups.filter((g) => g[1].length).map(([name, xs]) => `<div class="label gl">${name} · ${xs.length}</div>${xs.map((x) => bsRow(x)).join('')}`).join('')
+    : '<div class="empty">Nothing due in the next 14 days.</div>';
+  const recent = s.recent.slice(0, 25);
+  const courses = s.courses.filter((c) => c.ou);
+  return btns + kvs([['Next 3 days', n3, n3 ? 'warnc' : ''], ['Next 14 days', soon.filter(isDue).length], ['Courses', s.courses.length]]) +
+    `<div class="label gl first">Due soon<span class="dimt"> · next 14 days, Halifax time</span></div>${list}
+    ${later ? `<div class="mutedt sm" style="margin-top:.5rem">${later} more after the next 14 days.</div>` : ''}
+    <details class="bsgroup" data-dk="bs-recent"${dOpen('bs-recent')}><summary class="label gl">Recently due · ${s.recent.length}<span class="dimt"> · last 30 days</span></summary>${recent.length ? recent.map((x) => bsRow(x, true)).join('') : '<div class="empty">Nothing in the last 30 days.</div>'}</details>
+    <details class="bsgroup" data-dk="bs-grades"${dOpen('bs-grades')}><summary class="label gl">Grades</summary>
+     <div class="mutedt sm" style="margin:.4rem 0 .2rem">Grades stay in Brightspace (pulling them in would need your NSCC login). Open them per course:</div>
+     ${courses.length ? `<div class="btns wrap">${courses.map((c) => `<a class="btn sm" href="${esc(gradesUrl(c.ou))}" target="_blank" rel="noopener" title="${esc(c.name)}">${esc(c.code)}</a>`).join('')}</div>` : ''}</details>
+    <div class="tfoot">${d.stale ? '<span class="warnc">Brightspace didn’t answer, showing the last copy</span> · ' : ''}Synced from Brightspace <span data-ago="${esc(d.fetchedAt)}">${esc(ago(d.fetchedAt))}</span> · every 30 min</div>`;
+}
+
+// ---------- app launchers (custom links registered on Tyler's laptop: vscode:// by VS Code itself, nova-npp:// + nova-pt:// by NOVA-launchers.reg) ----------
+const APPS = {
+  vscode: { name: 'VS Code', url: 'vscode://', web: 'https://vscode.dev', what: 'Programming assignments', setup: false },
+  npp: { name: 'Notepad++', url: 'nova-npp://open', what: 'Quick edits and code files', setup: true },
+  pt: { name: 'Packet Tracer', url: 'nova-pt://open', what: 'Cisco network labs', setup: true },
+};
+const launchSt = {}; // id -> { t, opened, failed }
+function tabApp(id) {
+  const a = APPS[id], st = launchSt[id] || {};
+  const hint = st.failed ? `<div class="lhint warn" role="status"><b>Didn’t open?</b> ${a.setup ? 'First time? Run the NOVA launcher setup below (one double-click), then try again.' : 'First time? Install VS Code for Windows (it sets up the link itself), or use vscode.dev.'}</div>` : '';
+  const setup = a.setup ? `<details class="bsgroup" data-dk="setup-${id}"${dOpen('setup-' + id) || (st.failed ? ' open' : '')}><summary class="label gl">Launcher setup · one time</summary>
+     <ol class="steps"><li>Download <a class="lnk" href="launchers/NOVA-launchers.reg" download>NOVA-launchers.reg</a>.</li><li>Double-click it and choose <b>Yes</b>. It only adds two links for your Windows user (no admin).</li><li>Click Launch. When the browser asks, tick <b>Always allow</b> and click <b>Open</b>.</li></ol>
+     <div class="mutedt sm">Undo any time with <a class="lnk" href="launchers/NOVA-launchers-uninstall.reg" download>NOVA-launchers-uninstall.reg</a> · <a class="lnk" href="launchers/README.txt" target="_blank" rel="noopener">README</a></div></details>` : '';
+  return `<div class="appp"><div class="appic">${hexIc(AREA[id].icon)}</div><div><div class="hname">${esc(a.name)}</div><div class="mutedt sm">${esc(a.what)} · opens the app on this computer</div></div></div>
+   <div class="btns wrap"><a class="btn launch" href="${a.url}" data-launch="${id}">${ic('rocket', 20)} Launch ${esc(a.name)}</a>${a.web ? `<a class="btn" href="${a.web}" target="_blank" rel="noopener">Open vscode.dev ${ic('ext', 14)}</a>` : ''}</div>
+   ${hint}${st.opened && !st.failed ? '<div class="mutedt sm" style="margin-top:.6rem">Opened.</div>' : ''}${setup}`;
+}
+let launchWatch = null;
+document.addEventListener('click', (e) => {
+  const l = e.target.closest('[data-launch]'); if (!l) return;
+  const id = l.getAttribute('data-launch'); launchSt[id] = { t: Date.now() };
+  clearTimeout(launchWatch && launchWatch.tm);
+  const onBlur = () => { const s = launchSt[id]; if (s) { s.opened = true; s.failed = false; renderTiles(); } };
+  window.addEventListener('blur', onBlur, { once: true });
+  // nothing took focus within 4 s: the link probably isn't registered on this computer yet
+  launchWatch = { tm: setTimeout(() => { window.removeEventListener('blur', onBlur); const s = launchSt[id]; if (s && !s.opened) { s.failed = true; renderTiles(); } }, 4000) };
+});
 
 // ---------- Chat ----------
 const target = () => { const t = localStorage.getItem(LS.target); return TARGETS.some((x) => x.id === t) ? t : 'grok'; };
@@ -443,9 +545,15 @@ function markSeen() {
   setTimeout(() => renderTiles(), 8100);
   renderTiles(); updateUnread();
 }
+function updateDueBadge() { // Brightspace node: how many things are due in the next 3 days
+  const n = unlocked() ? dueSoonCount(3) : 0;
+  if (N3) N3.setUnread('brightspace', n);
+  const fb = $('#corenav [data-open="brightspace"] .nb'); if (fb) { fb.hidden = !n; fb.textContent = n > 9 ? '9+' : String(n); }
+}
 function updateUnread() {
   const n = unlocked() ? unreadCount() : 0;
   if (N3) N3.setUnread('chat', n);
+  updateDueBadge();
   const fb = $('#corenav [data-open="chat"] .nb'); if (fb) { fb.hidden = !n; fb.textContent = n > 9 ? '9+' : String(n); }
   document.title = (n ? `(${n}) ` : '') + 'NOVA' + (SEC ? ` · ${POS_NAME[posOf(SCR)]}` : '');
 }
@@ -458,7 +566,8 @@ function noticeReplies() { // a new reply arrived: glow the Chat node and the Ch
 
 // ---------- tiles: the open tabs on this screen ----------
 // 1 tab = full, 2 = side by side, 3 = one big + two stacked, 4+ = grid. On screen 1 the core keeps a column on the left.
-const BODY = { team: tabTeam, agents: tabAgents, github: tabGitHub, calo: tabCalo, tasks: tabTasks, business: tabBusiness, launch: tabLaunch, settings: tabSettings };
+const BODY = { team: tabTeam, agents: tabAgents, github: tabGitHub, calo: tabCalo, tasks: tabTasks, business: tabBusiness, launch: tabLaunch, settings: tabSettings,
+  brightspace: tabBrightspace, vscode: () => tabApp('vscode'), npp: () => tabApp('npp'), pt: () => tabApp('pt') };
 const tileEl = (id) => $(`#tiles > .tile[data-tab="${id}"]`);
 let activeTab = null;
 function setActive(id) { activeTab = id; document.querySelectorAll('#tiles > .tile').forEach((el) => el.classList.toggle('active', el.dataset.tab === id)); }
@@ -592,7 +701,11 @@ function tick() {
   document.querySelectorAll('[data-clock]').forEach((e) => { if (e.textContent !== c.hm) e.textContent = c.hm; });
   document.querySelectorAll('[data-ampm]').forEach((e) => { const v = `${c.ap} · ${c.zone}`; if (e.textContent !== v) e.textContent = v; });
 }
-function tickAgo() { document.querySelectorAll('[data-ago]').forEach((e) => { const v = e.getAttribute('data-ago'); if (v) e.textContent = ago(/^\d+$/.test(v) ? +v : v); }); }
+function tickAgo() {
+  document.querySelectorAll('[data-ago]').forEach((e) => { const v = e.getAttribute('data-ago'); if (v) e.textContent = ago(/^\d+$/.test(v) ? +v : v); });
+  document.querySelectorAll('[data-until]').forEach((e) => { const v = until(e.getAttribute('data-until')); if (e.textContent !== v) e.textContent = v; });
+  updateDueBadge();
+}
 function render() { if (!unlocked()) return; renderTiles(); updateUnread(); sync3D(); relay(); }
 
 // ---------- crypto (encrypted status feed) ----------
@@ -683,7 +796,22 @@ async function refreshCode() {
   else conn.copilot = null;
   await Promise.all(jobs); render();
 }
-const refreshConnAll = () => refreshConn().then(refreshCode);
+// Brightspace assignments (screen 1 only; every 30 min, the Worker caches the feed for 30 min too)
+let schoolBusy = false;
+async function refreshSchool() {
+  if (SEC || schoolBusy || !unlocked()) return;
+  if (conn.status && !isOn('brightspace')) { conn.school = { at: Date.now(), data: null, err: 'Brightspace isn’t connected yet.' }; render(); return; }
+  schoolBusy = true;
+  try {
+    const d = await api('/school/assignments');
+    conn.school = { at: Date.now(), data: { fetchedAt: d.fetchedAt, stale: !!d.stale, upcoming: (d.upcoming || []).slice(0, 80), recent: (d.recent || []).slice(0, 40), courses: (d.courses || []).slice(0, 20) } };
+  } catch (e) {
+    const keep = conn.school && conn.school.data;
+    conn.school = { at: Date.now(), data: keep || null, err: e.status === 503 ? 'Brightspace isn’t connected yet.' : e.status === 401 ? 'Not signed in to the secure service.' : 'Couldn’t reach Brightspace right now.' };
+  }
+  schoolBusy = false; render();
+}
+const refreshConnAll = () => refreshConn().then(() => Promise.all([refreshCode(), conn.school && conn.school.data && Date.now() - conn.school.at < SCHOOL_MS - 5000 ? null : refreshSchool()]));
 
 // ---------- relay: screen 1 -> screens 2 and 3 (decrypted status, GitHub, Calo, replies, agent lists; never a token) ----------
 let snapKey = '', relayAt = 0;
@@ -691,7 +819,7 @@ function snapshot() {
   const g = state.gh;
   return { status: state.status, statusErr: state.statusErr, calo: state.calo,
     gh: { prs: g.prs, run: g.run, runs: g.runs, commit: g.commit, commits: g.commits, fetchedAt: g.fetchedAt, error: g.error, rateResetAt: g.rateResetAt },
-    conn: { signed: !!conn.session, err: conn.err, status: conn.status, inbox: conn.inbox, inboxAt: conn.inboxAt, cursor: conn.cursor || null, copilot: conn.copilot || null } };
+    conn: { signed: !!conn.session, err: conn.err, status: conn.status, inbox: conn.inbox, inboxAt: conn.inboxAt, cursor: conn.cursor || null, copilot: conn.copilot || null, school: conn.school || null } };
 }
 function relay(force) {
   if (SEC || !unlocked()) return;
@@ -707,7 +835,7 @@ function takeSnap(d) {
   state.statusErr = d.status ? '' : d.statusErr || state.statusErr;
   Object.assign(state.gh, d.gh || {}); if (d.calo) state.calo = d.calo;
   const c = d.conn || {};
-  conn.status = c.status || null; conn.inbox = c.inbox || []; conn.inboxAt = c.inboxAt || 0; conn.err = c.err || ''; conn.cursor = c.cursor; conn.copilot = c.copilot;
+  conn.status = c.status || null; conn.inbox = c.inbox || []; conn.inboxAt = c.inboxAt || 0; conn.err = c.err || ''; conn.cursor = c.cursor; conn.copilot = c.copilot; conn.school = c.school || null;
   render(); noticeReplies();
 }
 const relayAlive = () => SEC && alive(1) && relayAt > 0;
@@ -790,7 +918,7 @@ function sync3D() {
 function fallbackCore() {
   const nav = $('#corenav'); if (!nav) return;
   root.classList.add('n3d-fallback');
-  nav.innerHTML = `<div class="fring">${coreRing()}</div>` + AREAS.map((a) => { const r = a.angle * Math.PI / 180; return `<button type="button" class="fnode ${a.muted ? 'muted' : ''} ${a.primary ? 'primary' : ''}" data-open="${a.id}" style="left:${(50 + Math.cos(r) * 41).toFixed(1)}%;top:${(50 - Math.sin(r) * 41).toFixed(1)}%">${ic(a.icon, 18)}<span>${esc(a.label)}</span><b class="nb" hidden></b></button>`; }).join('');
+  nav.innerHTML = `<div class="fring">${coreRing()}</div>` + AREAS.map((a, i) => { const r = (90 - i * 360 / AREAS.length) * Math.PI / 180; return `<button type="button" class="fnode ${a.muted ? 'muted' : ''} ${a.primary ? 'primary' : ''} ${a.group ? 'g-' + a.group : ''}" data-open="${a.id}" style="left:${(50 + Math.cos(r) * 41).toFixed(1)}%;top:${(50 - Math.sin(r) * 41).toFixed(1)}%">${ic(a.icon, 18)}<span>${esc(a.label)}</span><b class="nb" hidden></b></button>`; }).join('');
   updateUnread();
 }
 document.addEventListener('click', (e) => { const b = e.target.closest('#corenav [data-open]'); if (b) openTab(b.dataset.open); });
@@ -976,10 +1104,11 @@ function startLive() {
   timers.push(setInterval(() => { refreshGitHub(); checkCalo(); refreshStatus(); }, REFRESH_MS));
   timers.push(setInterval(() => { if (conn.session || localStorage.getItem(LS.pass)) pollInbox(); }, INBOX_MS));       // Chat replies
   timers.push(setInterval(() => { if (document.visibilityState === 'visible') refreshConnAll(); }, 120000)); // connections + agent lists
+  timers.push(setInterval(() => refreshSchool(), SCHOOL_MS));                                                    // Brightspace, every 30 min
 }
 function stopLive() { timers.forEach((t) => { clearInterval(t); clearTimeout(t); }); timers = []; }
 function lock(msg) {
-  window.__novaShown = false; apiLogout(); conn.cursor = undefined; conn.copilot = undefined; closeModal(); closeMenu();
+  window.__novaShown = false; apiLogout(); conn.cursor = undefined; conn.copilot = undefined; conn.school = undefined; openDetails.clear(); closeModal(); closeMenu();
   localStorage.removeItem(LS.pass); keyCache.clear(); state.status = null; relayAt = 0; stopLive();
   if (!SEC) { localStorage.removeItem(LS.sent); localStorage.removeItem(LS.draft); }
   $('#tiles').replaceChildren(); root.classList.remove('has-tiles'); tileSig = '';

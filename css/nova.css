@@ -9,7 +9,7 @@
 :root{
   --bg:#03080f; --bg2:#06111d;
   --a:64,214,255; --acc:rgb(var(--a)); --acc2:#9beaff;
-  --warn:255,184,77; --ok:84,232,170; --bad:255,107,107;
+  --warn:255,184,77; --ok:84,232,170; --bad:255,107,107; --tools:165,140,255;
   --text:#e2f6ff; --muted:#7f9db3; --dim:#4b6477;
   --panel:linear-gradient(160deg,rgba(10,31,50,.78),rgba(4,15,26,.74)); --panel-glass:rgba(8,26,42,.42); --line:rgba(var(--a),.22);
   --font-ui:'Inter',system-ui,sans-serif;
@@ -304,3 +304,32 @@ html[data-screen="1"] .menu{right:auto;left:.8rem}
 html.has-tiles:not([data-screen="1"]) #tiles{padding-right:4.1rem}
 .row b.ell,.row .ell{display:block}
 .row .badge{flex:none}
+/* ---------- v2.2: Brightspace (school) + app launchers ---------- */
+.bsbtns{margin:0 0 1rem}
+.bsi{border-top:1px solid rgba(var(--a),.09)}
+.bsi:first-of-type{border-top:0}
+.bsi>summary{display:flex;align-items:center;gap:.75rem;padding:.65rem 0;cursor:pointer;list-style:none}
+.bsi>summary::-webkit-details-marker,.bsgroup>summary::-webkit-details-marker{display:none}
+.bsi>summary:hover b{color:var(--acc2)}
+.bsi[open]>summary b{color:var(--acc2)}
+.bsi .grow{min-width:0}
+.bsi .cd{font-family:var(--font-mono);font-size:.78rem;letter-spacing:.06em;white-space:nowrap;flex:none}
+.bsi.past{opacity:.75}
+.bsd{padding:0 0 .8rem 1.3rem}
+.bsd .desc{white-space:pre-wrap;word-break:break-word;font-size:.88rem;line-height:1.45;color:var(--text);background:rgba(var(--a),.05);border-left:2px solid rgba(var(--a),.4);padding:.55rem .7rem;border-radius:.2rem;max-height:14rem;overflow:auto}
+.bsd .btns{margin-top:.6rem}
+.bsgroup{margin-top:.4rem}
+.bsgroup>summary{cursor:pointer;list-style:none}
+.bsgroup>summary::before{content:'▸';margin-right:.2rem;color:var(--acc);transition:transform .15s;display:inline-block}
+.bsgroup[open]>summary::before{transform:rotate(90deg)}
+.appp{display:flex;align-items:center;gap:1rem;margin:.2rem 0 1rem}
+.appp .ic{width:4rem;height:4rem;display:grid;place-items:center;position:relative}
+.appp .ic svg.hex{position:absolute;inset:0;width:100%;height:100%}
+.tile[data-tab="vscode"],.tile[data-tab="npp"],.tile[data-tab="pt"]{--a:var(--tools);--acc:rgb(var(--tools))}
+.btn.launch{font-size:1.25rem;padding:.95rem 1.8rem;border-color:rgba(var(--a),.8);background:rgba(var(--a),.16);box-shadow:0 0 1.2rem rgba(var(--a),.25)}
+.btn.launch:hover{background:rgba(var(--a),.28);box-shadow:0 0 1.6rem rgba(var(--a),.45)}
+.lhint{margin-top:.9rem;padding:.6rem .8rem;border-radius:.3rem;font-size:.9rem}
+.lhint.warn{border:1px solid rgba(var(--warn),.5);background:rgba(var(--warn),.08);color:var(--text)}
+.lhint.warn b{color:rgb(var(--warn))}
+.steps{margin:.5rem 0 .6rem 1.2rem;font-size:.9rem;line-height:1.6}
+.fnode.g-tools{color:rgb(var(--tools));border-color:rgba(var(--tools),.45)}

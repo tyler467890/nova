@@ -1,4 +1,4 @@
-/* NOVA 3D core v2.1 styles: the globe canvas, node labels (front-facing nodes only, shown near/on hover) and unread badges. */
+/* NOVA 3D core v2.2 styles: the globe canvas, node labels (front-facing nodes only, shown near/on hover) and unread badges. */
 :root{--n3d-a:var(--a,64,214,255);--n3d-warn:var(--warn,255,184,77);--n3d-text:var(--text,#e2f6ff);--n3d-muted:var(--muted,#7f9db3);
   --n3d-mono:var(--font-mono,'JetBrains Mono',ui-monospace,monospace)}
 #nova-3d{position:fixed;left:0;top:0;width:10px;height:10px;display:block;z-index:3;touch-action:none;cursor:grab;background:transparent}
@@ -16,6 +16,8 @@
 .n3d-node-label.n3d-primary{font-size:.92rem;padding:.4rem .75rem}
 .n3d-node-label.n3d-unread{border-color:rgba(var(--n3d-warn),.8);color:rgb(var(--n3d-warn))}
 .n3d-node-label .n3d-nl-s{font-size:.6rem;letter-spacing:.14em;color:var(--n3d-muted);text-shadow:none}
+.n3d-node-label.n3d-g-tools{--n3d-a:var(--tools,165,140,255)}
+.n3d-node-label.n3d-g-tools .n3d-nl-s{color:rgba(var(--tools,165,140,255),.75)}
 .n3d-node-label.n3d-muted{color:var(--n3d-muted);border-style:dashed;text-shadow:none}
 /* unread badge on a node: always visible while there is something new */
 .n3d-badge{position:absolute;left:0;top:0;min-width:1.25rem;height:1.25rem;padding:0 .35rem;border-radius:.7rem;display:grid;place-items:center;

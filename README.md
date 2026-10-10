@@ -8,7 +8,7 @@ Tyler's personal command center for Calo. Static site on GitHub Pages.
   (600,000 iterations, random salt). The passphrase is never stored in this repo.
 - No secrets, tokens or passphrases belong in this repository.
 
-## NOVA 2 layout (2.1: globe core)
+## NOVA 2 layout (2.1: globe core · 2.2: school + app launchers)
 Every screen starts as the same empty blue grid, drawn once on a 2D canvas so it lines up across all three monitors
 (`js/grid.js`). The only thing on the home view is the 3D core on the centre screen, plus a menu button that fades in
 when the mouse moves (Full screen, Set up screens, Clear screens, Settings, Identify, Lock).
@@ -21,6 +21,13 @@ when the mouse moves (Full screen, Set up screens, Clear screens, Settings, Iden
   shows the name, click a front node opens the tab, double-click turns a node to the front (double-click empty space or
   Home resets). Arrow keys turn to the neighbouring node, Enter opens the front one. Chat shows an amber badge for unread
   replies and glows when a new one lands; AI Team shows an amber badge when an agent needs you.
+- **School (2.2)**: the globe has 13 nodes. **Brightspace** shows what's due in the next 14 days (Today / This week /
+  Later, Halifax time, countdowns, expandable details), Recently due (collapsed), per-course grade links and buttons for
+  Brightspace, Grades and Calendar. Data comes from nova-api `GET /school/assignments` (the private NSCC calendar feed,
+  cached 30 min; grades aren't pulled). The node carries an amber badge with the number of items due in the next 3 days.
+  **VS Code**, **Notepad++** and **Packet Tracer** are grouped as Tools (neighbouring spots, violet accent); each opens a
+  panel with a Launch button (`vscode://`, `nova-npp://open`, `nova-pt://open`). The last two need the one-time
+  `launchers/NOVA-launchers.reg` on the laptop (per-user, starts the program with no arguments).
 - **Tabs** open on the centre screen and can be thrown to Left / Centre / Right with the buttons in the tab header,
   the 1 / 2 / 3 keys, or by dragging the header off the side of the screen. 1 tab fills the screen, 2 split it,
   3 or more tile. The layout is saved in `localStorage` (`nova.layout.v2`) and comes back after a reload.
