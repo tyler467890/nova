@@ -5,7 +5,7 @@
 import { conn, api, apiLogin, apiLogout, refreshConn, pollInbox, isOn, sendDirect, confirmCommand, openConnections, connRows, modal, closeModal, TARGETS, esc } from './connect.js';
 import { drawGrid } from './grid.js';
 
-const VERSION = '2.0.0';
+const VERSION = '2.1.0';
 const REPO = 'tyler467890/student-day-planner';
 const CALO = 'https://tyler467890.github.io/student-day-planner/';
 const TZ = 'America/Halifax';

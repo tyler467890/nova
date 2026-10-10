@@ -8,14 +8,19 @@ Tyler's personal command center for Calo. Static site on GitHub Pages.
   (600,000 iterations, random salt). The passphrase is never stored in this repo.
 - No secrets, tokens or passphrases belong in this repository.
 
-## NOVA 2.0 layout
+## NOVA 2 layout (2.1: globe core)
 Every screen starts as the same empty blue grid, drawn once on a 2D canvas so it lines up across all three monitors
 (`js/grid.js`). The only thing on the home view is the 3D core on the centre screen, plus a menu button that fades in
 when the mouse moves (Full screen, Set up screens, Clear screens, Settings, Identify, Lock).
 
 - **Core nodes** (`3d/nova-3d.min.js`, three.js r170 bundled, no CDN): Chat, AI Team, Agents (Cursor + Copilot), GitHub,
-  Calo App, Tasks, Business (after launch), Quick Launch, Settings. Drag rotates, scroll zooms, hover shows the name,
-  click opens the tab. Chat shows an amber badge for unread replies and glows when a new one lands.
+  Calo App, Tasks, Business (after launch), Quick Launch, Settings. Since 2.1 the core is a holographic wireframe globe and
+  the nodes sit on its surface, spread evenly (Fibonacci seed + relax, Chat at the front). Drag spins it in any direction
+  (trackball, with inertia and damping); when it slows down, the nearest node eases to the front-centre. Scroll or pinch
+  zooms. Nodes on the far side fade and shrink and their labels hide, so categories reveal themselves as you spin. Hover
+  shows the name, click a front node opens the tab, double-click turns a node to the front (double-click empty space or
+  Home resets). Arrow keys turn to the neighbouring node, Enter opens the front one. Chat shows an amber badge for unread
+  replies and glows when a new one lands; AI Team shows an amber badge when an agent needs you.
 - **Tabs** open on the centre screen and can be thrown to Left / Centre / Right with the buttons in the tab header,
   the 1 / 2 / 3 keys, or by dragging the header off the side of the screen. 1 tab fills the screen, 2 split it,
   3 or more tile. The layout is saved in `localStorage` (`nova.layout.v2`) and comes back after a reload.
