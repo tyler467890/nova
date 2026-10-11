@@ -8,13 +8,19 @@ Tyler's personal command center for Calo. Static site on GitHub Pages.
   (600,000 iterations, random salt). The passphrase is never stored in this repo.
 - No secrets, tokens or passphrases belong in this repository.
 
-## NOVA 2.3: Phone (4th screen)
+## NOVA 2.4: Phone = screen 4 (like the other screens)
 
-Open `?screen=phone` on a phone (or install it from there) for a minimal, battery-light NOVA: flat core with clock, big Chat, Brightspace due soon, Tasks, Calo stats. App-launch panels stay on the computer.
+Open `?screen=phone` on a paired phone (or the installed app). It starts as the same empty blue grid as screens 2 and 3. Panels show up only when you send them there: the **Phone** button on any desktop panel, or key 4. They use the desktop's glass panel style, scaled for the phone: one panel fills the screen, two share it, three or more scroll.
 
-**Pairing:** on the computer, open Menu, then Settings, then Phone, then **Pair phone**. Scan the QR with the phone camera (or open `?screen=phone` and type the 8-letter code). The code lasts 5 minutes and works once. The phone gets its own revocable device token (180 days); remove it any time under Settings, then Phone. Install: iPhone Share, then Add to Home Screen; Android, then Install app.
+Each phone panel has the same send-to controls as the desktop (**Left / Centre / Right / Phone**). The computer's screens dim when they aren't open. You can also drag a panel's header to the left, right or top edge (top = centre). Double-tap a header to make that panel fill the phone; double-tap again to share. ✕ closes the panel everywhere, just like on the desktop.
 
-**Sync:** screen 1 bridges the local BroadcastChannel to a Cloudflare Durable Object room (`/sync`, WebSocket hibernation). Desktop panels get a **Phone** send-to button (key 4). The phone's **Send** returns a panel to any desktop screen. Chat is shared both ways. Chat and snapshots are relayed in memory only; only the device list and hashed pairing codes are stored. The token travels in the WebSocket subprotocol, never in a URL. The socket reconnects with backoff and closes while the phone is hidden to save battery.
+**Core on the phone:** desktop menu → *Show the core on the phone*, or Settings → Phone. The 3D globe then appears on the phone too and also stays on the centre screen. Tapping a node opens that panel on the phone. **Centre** or ✕ on the phone's core bar takes it off again. WebGL loads only while the core is on the phone and pauses when it isn't.
+
+The only other chrome is a tiny dot at the bottom, which is also the sync light: green = linked, grey = computer closed, amber = offline or reconnecting. It opens **Settings** (sync, install, core, unpair) and **Unpair**.
+
+**Pairing:** on the computer, Menu → Settings → Phone → **Pair phone**, then scan the QR with the phone camera (or open `?screen=phone` and type the 8-letter code). The code lasts 5 minutes and works once. Each phone gets its own revocable token; remove it under Settings → Phone. Install: iPhone Share → Add to Home Screen; Android ⋮ → Install app.
+
+**Sync:** screen 1 bridges the BroadcastChannel to a Cloudflare Durable Object room (`/sync`, WebSocket hibernation). Chat and snapshots are relayed in memory only. The token travels in the WebSocket subprotocol, never in a URL. The phone reconnects with backoff and drops the socket 45 s after it goes to the background.
 
 ## NOVA 2 layout (2.1: globe core · 2.2: school + app launchers)
 Every screen starts as the same empty blue grid, drawn once on a 2D canvas so it lines up across all three monitors

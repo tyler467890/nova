@@ -1,7 +1,7 @@
 // NOVA boot config, loaded synchronously in <head> (CSP forbids inline scripts) so each window knows
 // its screen number, its place (left / centre / right) and the performance mode before first paint.
 // ?screen=1 (default) holds the core and the secure session · ?screen=2 · ?screen=3. Settings → Screens sets the order.
-// ?screen=phone is the 4th screen: a paired phone, synced across devices through nova-api (NOVA 2.3).
+// ?screen=phone is the 4th screen: a paired phone, synced across devices through nova-api (NOVA 2.3; 2.4: behaves like screens 2/3).
 (function () {
   var q = new URLSearchParams(location.search), d = document.documentElement;
   var get = function (k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } };

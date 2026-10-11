@@ -6,7 +6,7 @@ import { conn, api, apiLogin, apiLogout, refreshConn, pollInbox, isOn, sendDirec
 import { drawGrid } from './grid.js';
 import { createSync } from './sync.js';
 
-const VERSION = '2.3.0';
+const VERSION = '2.4.0';
 const REPO = 'tyler467890/student-day-planner';
 const CALO = 'https://tyler467890.github.io/student-day-planner/';
 const TZ = 'America/Halifax';
@@ -44,7 +44,7 @@ const state = {
   gh: lsGet(LS.gh) || { cache: {}, prs: null, run: null, commit: null, fetchedAt: 0, error: '', rateResetAt: 0 },
   calo: lsGet(LS.calo) || { checkedAt: 0, online: null },
 };
-window.NOVA = { state, conn, remote, version: VERSION, get screen() { return PHONE ? 'phone' : SCR; }, get layout() { return L; }, get position() { return posOf(SCR); }, get sync() { return sync; }, get view() { return pview; } }; // read-only hook for tests
+window.NOVA = { state, conn, remote, version: VERSION, get screen() { return PHONE ? 'phone' : SCR; }, get layout() { return L; }, get position() { return posOf(SCR); }, get sync() { return sync; }, get pcore() { return !!L.pcore; } }; // read-only hook for tests
 
 // ---------- time (Halifax) ----------
 const fmt = (o) => new Intl.DateTimeFormat('en-US', { timeZone: TZ, ...o });
@@ -231,21 +231,22 @@ window.addEventListener('resize', () => { clearTimeout(rzT); rzT = setTimeout(()
 // { seq, tabs: [{ id, pos }] } in localStorage, announced over the BroadcastChannel. pos = left | centre | right | phone.
 // A tab whose screen isn't open shows on screen 1 instead (and goes back when that screen opens again).
 // A tab sent to the phone stays on the phone (it waits there if the phone is asleep); screen 1 relays the layout to it.
-// The phone also keeps its own tabs (PL): opening a node on the phone never takes a tab away from the desktop.
+// NOVA 2.4: the phone is screen 4 just like the others: it starts as the empty grid and shows only what's sent to it.
+// L.pcore = the core is also shown on the phone (it always stays on the centre screen too).
 const LKEY = PHONE ? LS.playout : LS.layout;
 const cleanTabs = (tabs) => tabs.filter((t, i) => t && AREA[t.id] && ALLPOS.includes(t.pos) && tabs.findIndex((u) => u && u.id === t.id) === i);
-let L = (() => { const x = lsGet(LKEY); return x && Array.isArray(x.tabs) ? { seq: +x.seq || 0, tabs: cleanTabs(x.tabs) } : { seq: 0, tabs: [] }; })();
-let PL = PHONE ? (lsGet(LS.plocal) || []).filter((id) => AREA[id] && !PHONE_HIDE.has(id)) : [];
-function setLayout(tabs) {
-  L = { seq: Math.max(Date.now(), L.seq + 1), tabs };
+let L = (() => { const x = lsGet(LKEY); return x && Array.isArray(x.tabs) ? { seq: +x.seq || 0, tabs: cleanTabs(x.tabs), pcore: !!x.pcore } : { seq: 0, tabs: [], pcore: false }; })();
+if (PHONE) try { localStorage.removeItem(LS.plocal); } catch (e) {} // 2.3's phone-only tabs are gone
+function setLayout(tabs, pcore = !!L.pcore) {
+  L = { seq: Math.max(Date.now(), L.seq + 1), tabs, pcore: !!pcore };
   lsSet(LKEY, L); chan.postMessage({ t: 'layout', L }); syncOut({ t: 'layout', L });
-  renderTiles(); updateUnread();
+  renderTiles(); updateUnread(); if (PHONE) phoneCore(); else renderCoreChip();
 }
 function takeLayout(x, force) {
   if (!x || !Array.isArray(x.tabs) || !(force || x.seq > L.seq)) return false;
-  L = { seq: +x.seq || 0, tabs: cleanTabs(x.tabs) };
+  L = { seq: +x.seq || 0, tabs: cleanTabs(x.tabs), pcore: !!x.pcore };
   if (PHONE) lsSet(LKEY, L);
-  renderTiles(); updateUnread(); return true;
+  renderTiles(); updateUnread(); if (PHONE) phoneCore(); else renderCoreChip(); return true;
 }
 const available = () => POS.filter((p) => alive(scrAt(p)));
 function effScreen(t) {
@@ -254,16 +255,19 @@ function effScreen(t) {
   if (alive(1)) return 1;
   return [1, 2, 3].find(alive) || SCR;
 }
-function phoneTabs() {
-  const shared = L.tabs.filter((t) => t.pos === PH && !PHONE_HIDE.has(t.id));
-  return shared.concat(PL.filter((id) => !shared.some((t) => t.id === id)).map((id) => ({ id, pos: PH, local: true })));
-}
-const mine = () => { if (PHONE) return phoneTabs(); const m = L.tabs.filter((t) => effScreen(t) === SCR); return m.filter((t) => t.id === 'chat').concat(m.filter((t) => t.id !== 'chat')); };
+const mine = () => { const m = PHONE ? L.tabs.filter((t) => t.pos === PH && !PHONE_HIDE.has(t.id)) : L.tabs.filter((t) => effScreen(t) === SCR); return m.filter((t) => t.id === 'chat').concat(m.filter((t) => t.id !== 'chat')); };
 function defaultPos() { return alive(scrAt('centre')) ? 'centre' : posOf(SCR); }
 function openTab(id, pos) {
   if (!AREA[id]) return;
-  if (PHONE) { phoneOpen(id); return; }
+  if (PHONE && PHONE_HIDE.has(id)) return;
   const ex = L.tabs.find((t) => t.id === id);
+  if (PHONE) { // a node tapped on the phone's core: the panel comes to the phone (wherever it was)
+    if (ex && ex.pos === PH) { flashTab(id); return; }
+    setLayout(L.tabs.filter((t) => t.id !== id).concat({ id, pos: PH }));
+    if (id === 'brightspace' && (!conn.school || Date.now() - (conn.school.at || 0) > SCHOOL_MS - 5000)) refreshSchool();
+    setTimeout(() => { const el = tileEl(id); if (el) { el.classList.add('arrive'); setActive(id); } }, 0);
+    return;
+  }
   if (ex && (!pos || ex.pos === pos) && ex.pos !== PH) { flashTab(id); chan.postMessage({ t: 'flash', id }); return; }
   const tabs = L.tabs.filter((t) => t.id !== id); tabs.push({ id, pos: pos || defaultPos() });
   setLayout(tabs);
@@ -274,23 +278,24 @@ function openTab(id, pos) {
 }
 function sendTab(id, pos) {
   if (!ALLPOS.includes(pos)) return;
-  if (PHONE) { phoneSend(id, pos); return; }
+  if (PHONE && pos === PH) return;
+  if (PHONE && !deskOn()) { note('<b>Your computer isn’t connected</b><span class="mutedt">Open NOVA on your computer, then try again.</span>'); return; }
   if (pos === PH) {
     if (PHONE_HIDE.has(id)) return;
     if (!pairedCount() && !phoneOn()) { note('<b>No phone paired yet</b><span class="mutedt">Pair one in Settings → Phone.</span>'); return; }
     if (!phoneOn()) note('<b>Sent to your phone</b><span class="mutedt">Your phone isn’t open right now. It’ll be waiting there next time you open NOVA on it.</span>', 7000);
   } else if (!available().includes(pos)) { note(`<b>${POS_NAME[pos]} screen isn’t open</b><span class="mutedt">Open it with Set up screens on screen 1.</span>`); return; }
   const t = L.tabs.find((x) => x.id === id); if (!t || t.pos === pos && (pos === PH || effScreen(t) === scrAt(pos))) return;
-  const el = tileEl(id), from = POS.indexOf(posOf(SCR)), to = pos === PH ? 9 : POS.indexOf(pos);
+  const el = tileEl(id), from = PHONE ? 1 : POS.indexOf(posOf(SCR)), to = pos === PH ? 9 : POS.indexOf(pos);
   const go = () => setLayout(L.tabs.map((x) => (x.id === id ? { id, pos } : x)));
-  if (el && to !== from && !prefersReduced()) { el.classList.add(pos === PH ? 'throw-d' : to < from ? 'throw-l' : 'throw-r'); setTimeout(go, 170); } else go();
+  const cls = pos === PH ? 'throw-d' : PHONE ? (pos === 'left' ? 'throw-l' : pos === 'right' ? 'throw-r' : 'throw-u') : to < from ? 'throw-l' : 'throw-r';
+  if (el && (PHONE || to !== from) && !prefersReduced()) { el.classList.add(cls); setTimeout(go, 170); } else go();
 }
 function closeTab(id) {
-  if (PHONE) { PL = PL.filter((x) => x !== id); lsSet(LS.plocal, PL); if (pview === id) pview = null; if (L.tabs.some((t) => t.id === id && t.pos === PH)) setLayout(L.tabs.filter((t) => t.id !== id)); else renderTiles(); return; }
   setLayout(L.tabs.filter((t) => t.id !== id));
 }
 function clearScreens() {
-  if (PHONE) { PL = []; lsSet(LS.plocal, PL); pview = null; setLayout(L.tabs.filter((t) => t.pos !== PH)); closeMenu(); return; }
+  if (PHONE) { setLayout(L.tabs.filter((t) => t.pos !== PH), false); closeMenu(); return; }
   setLayout([]); closeMenu();
 }
 const prefersReduced = () => window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -577,7 +582,7 @@ function chatSubmit(body) {
     const item = { id: r.request_id || null, text: text.slice(0, 4000), target: tg, time: new Date().toISOString(), link: r.link || '' };
     const list = (lsGet(LS.sent) || []).concat(item).slice(-60);
     lsSet(LS.sent, list); ta.value = ''; localStorage.removeItem(LS.draft); chan.postMessage({ t: 'sent' }); renderTiles();
-    if (PHONE) syncOut({ t: 'chat', item }); // the desktop adds it to its chat too (and relays its own sends in the snapshot)
+    syncOut({ t: 'chat', item }); // the other device adds it to its chat right away (screens 2/3 reach the phone through screen 1's snapshot)
   } });
 }
 function mergeSent(items) { // chat messages sent from the other device
@@ -590,7 +595,7 @@ function mergeSent(items) { // chat messages sent from the other device
 }
 // what's new since you last looked: the window showing Chat (and visible) marks replies as seen
 function markSeen() {
-  if (!unlocked() || document.hidden || !mine().some((t) => t.id === 'chat') || (PHONE && pview !== 'chat')) return;
+  if (!unlocked() || document.hidden || !mine().some((t) => t.id === 'chat')) return;
   const s = seenAt(), list = conn.inbox || [];
   const newest = list.reduce((m, r) => Math.max(m, Date.parse(r.time) || 0), 0);
   if (newest <= s) return;
@@ -603,13 +608,13 @@ function markSeen() {
 function updateDueBadge() { // Brightspace node: how many things are due in the next 3 days
   const n = unlocked() ? dueSoonCount(3) : 0;
   if (N3) N3.setUnread('brightspace', n);
-  document.querySelectorAll('[data-open="brightspace"] .nb,[data-pv="brightspace"] .nb').forEach((fb) => { fb.hidden = !n; fb.textContent = n > 9 ? '9+' : String(n); });
+  document.querySelectorAll('[data-open="brightspace"] .nb').forEach((fb) => { fb.hidden = !n; fb.textContent = n > 9 ? '9+' : String(n); });
 }
 function updateUnread() {
   const n = unlocked() ? unreadCount() : 0;
   if (N3) N3.setUnread('chat', n);
   updateDueBadge();
-  document.querySelectorAll('[data-open="chat"] .nb,[data-pv="chat"] .nb').forEach((fb) => { fb.hidden = !n; fb.textContent = n > 9 ? '9+' : String(n); });
+  document.querySelectorAll('[data-open="chat"] .nb').forEach((fb) => { fb.hidden = !n; fb.textContent = n > 9 ? '9+' : String(n); });
   document.title = (n ? `(${n}) ` : '') + 'NOVA' + (PHONE ? '' : SEC ? ` · ${POS_NAME[posOf(SCR)]}` : '');
 }
 let lastNewest = -1;
@@ -628,9 +633,12 @@ let activeTab = null;
 function setActive(id) { activeTab = id; document.querySelectorAll('#tiles > .tile').forEach((el) => el.classList.toggle('active', el.dataset.tab === id)); }
 function tileHead(id) {
   const a = AREA[id], here = posOf(SCR), av = available();
-  if (PHONE) return `<span class="tglyph">${ic(a.icon, 20, 'var(--acc)')}</span><h2>${esc(a.label)}${a.sub ? `<small>${esc(a.sub)}</small>` : ''}</h2>
-   ${deskOn() && av.length ? `<button type="button" class="st psend" data-psend title="Send ${esc(a.label)} to a screen on your computer">${ic('monitor', 16)} Send</button>` : ''}
+  if (PHONE) { // the same four send-to buttons as a desktop panel; the computer's screens dim when they aren't open
+    const pb = (p) => `<button type="button" class="st" data-sendto="${p}" ${av.includes(p) ? '' : 'disabled aria-disabled="true"'} title="${av.includes(p) ? 'Send to the ' + POS_NAME[p].toLowerCase() + ' screen' : POS_NAME[p] + ' screen isn’t open'}">${p === 'left' ? '◀ ' : ''}${POS_NAME[p]}${p === 'right' ? ' ▶' : ''}</button>`;
+    return `<span class="tglyph">${ic(a.icon, 18, 'var(--acc)')}</span><h2>${esc(a.label)}</h2>
+   <nav class="sendto" aria-label="Send ${esc(a.label)} to a screen">${POS.map(pb).join('')}<button type="button" class="st ph on" data-sendto="phone" aria-pressed="true" disabled title="On this phone">${ic('phone', 14)}</button></nav>
    <button type="button" class="tx" data-closetab title="Close ${esc(a.label)}" aria-label="Close ${esc(a.label)}">${ic('clear', 18, 'currentColor', 2)}</button>`;
+  }
   const btn = (p) => `<button type="button" class="st ${p === here ? 'on' : ''}" data-sendto="${p}" ${p === here ? 'aria-pressed="true" disabled' : ''} title="${p === here ? 'On this screen' : 'Send to the ' + POS_NAME[p].toLowerCase() + ' screen'} (key ${POS.indexOf(p) + 1})">${p === 'left' ? '◀ ' : ''}${POS_NAME[p]}${p === 'right' ? ' ▶' : ''}</button>`;
   const ph = !PHONE_HIDE.has(id) && (pairedCount() > 0 || phoneOn()) ? `<button type="button" class="st ph ${phoneOn() ? 'live' : ''}" data-sendto="phone" title="Send to your phone${phoneOn() ? '' : ' (not open right now, it waits there)'} (key 4)">${ic('phone', 14)} Phone</button>` : '';
   return `<span class="tglyph">${ic(a.icon, 20, 'var(--acc)')}</span><h2>${esc(a.label)}${a.sub ? `<small>${esc(a.sub)}</small>` : ''}</h2>
@@ -651,7 +659,7 @@ function renderTiles() {
   const box = $('#tiles'); if (!box) return;
   if (!unlocked()) { box.replaceChildren(); root.classList.remove('has-tiles'); return; }
   const list = mine(), ids = list.map((t) => t.id);
-  if (PHONE) phoneArrivals(ids);
+  const fresh = PHONE && tilesDrawn ? ids.filter((id) => !tileEl(id)) : [];
   [...box.children].forEach((el) => { if (!ids.includes(el.dataset.tab)) el.remove(); });
   list.forEach((t, i) => {
     let el = tileEl(t.id);
@@ -661,13 +669,22 @@ function renderTiles() {
     if (t.id === 'chat') fillChat(el.querySelector('.tbody')); else patch(el.querySelector('.tbody'), BODY[t.id]());
   });
   if (activeTab && !ids.includes(activeTab)) activeTab = null;
-  if (PHONE) { if (pview && !ids.includes(pview)) pview = null; [...box.children].forEach((el) => el.classList.toggle('pshow', el.dataset.tab === pview)); renderPhoneBar(list); }
+  tilesDrawn = true;
+  if (fresh.length) { setActive(fresh[fresh.length - 1]); try { if (navigator.vibrate) navigator.vibrate(20); } catch (e) {} if (fresh.includes('brightspace') && (!conn.school || Date.now() - (conn.school.at || 0) > SCHOOL_MS - 5000)) refreshSchool(); }
   layoutTiles();
   if (ids.includes('chat')) queueMicrotask(markSeen);
 }
-let tileSig = '';
+let tileSig = '', tilesDrawn = false;
 function layoutTiles() {
-  if (PHONE) { root.classList.toggle('has-tiles', !!(pview && tileEl(pview))); return; } // the phone shows one panel at a time
+  if (PHONE) { // panels stack: 1 fills the screen, 2 share it, 3+ scroll. A double-tapped header makes that panel fill the screen.
+    const box = $('#tiles'), n = box ? box.children.length : 0;
+    root.classList.toggle('has-tiles', n > 0); if (box) box.dataset.n = Math.min(n, 3);
+    if (pmax && !tileEl(pmax)) pmax = null;
+    if (box) [...box.children].forEach((el) => el.classList.toggle('pmax', el.dataset.tab === pmax));
+    root.classList.toggle('pmaxed', !!pmax);
+    if (N3) N3.relayout(300);
+    return;
+  }
   const box = $('#tiles'), n = box ? box.children.length : 0;
   const had = root.classList.contains('has-tiles'); root.classList.toggle('has-tiles', n > 0);
   if (!box) return;
@@ -710,28 +727,36 @@ document.addEventListener('keydown', (e) => {
 // drag a tile by its header off the left or right edge to throw it to the neighbouring screen
 (function dragThrow() {
   let d = null;
-  const neighbour = (dir) => { const i = POS.indexOf(posOf(SCR)) + dir, p = POS[i]; return p && available().includes(p) ? p : null; };
-  const zone = (x) => (x < 70 ? neighbour(-1) && -1 : x > innerWidth - 70 ? neighbour(1) && 1 : 0) || 0;
-  const edges = (z) => { $('#edgeL').classList.toggle('on', z === -1); $('#edgeR').classList.toggle('on', z === 1); };
+  // on the phone: drag a header to the left edge, the right edge or the top edge to send it to that screen on the computer
+  const neighbour = (dir) => { if (PHONE) { const p = dir === -1 ? 'left' : dir === 1 ? 'right' : 'centre'; return deskOn() && available().includes(p) ? p : null; } const i = POS.indexOf(posOf(SCR)) + dir, p = POS[i]; return p && available().includes(p) ? p : null; };
+  const EW = PHONE ? 56 : 70;
+  const zone = (x, y) => (x < EW ? neighbour(-1) && -1 : x > innerWidth - EW ? neighbour(1) && 1 : PHONE && y < 64 ? neighbour(0) && 2 : 0) || 0;
+  const edges = (z) => { $('#edgeL').classList.toggle('on', z === -1); $('#edgeR').classList.toggle('on', z === 1); const t = $('#edgeT'); if (t) t.classList.toggle('on', z === 2); };
+  let lastTap = { id: '', t: 0 };
   document.addEventListener('pointerdown', (e) => {
-    const h = e.target.closest('#tiles .thead'); if (!h || e.target.closest('button,a,select,input') || e.button !== 0 || innerWidth < 760) return;
+    const h = e.target.closest('#tiles .thead'); if (!h || e.target.closest('button,a,select,input') || e.button !== 0 || (innerWidth < 760 && !PHONE)) return;
     const el = h.closest('.tile'); d = { el, id: el.dataset.tab, x0: e.clientX, y0: e.clientY, moved: false, pid: e.pointerId };
     try { h.setPointerCapture(e.pointerId); } catch (_) {}
     const l = neighbour(-1), r = neighbour(1);
     $('#edgeL span').textContent = l ? `Send to ${POS_NAME[l].toLowerCase()} screen` : ''; $('#edgeR span').textContent = r ? `Send to ${POS_NAME[r].toLowerCase()} screen` : '';
+    if (PHONE && $('#edgeT')) { const c = neighbour(0); $('#edgeT span').textContent = c ? 'Send to centre screen' : ''; root.classList.toggle('pdrag-l', !!l); root.classList.toggle('pdrag-r', !!r); root.classList.toggle('pdrag-t', !!c); }
   });
   document.addEventListener('pointermove', (e) => {
     if (!d || e.pointerId !== d.pid) return;
     const dx = e.clientX - d.x0, dy = e.clientY - d.y0;
     if (!d.moved && Math.hypot(dx, dy) < 6) return;
     if (!d.moved) { d.moved = true; d.el.classList.add('dragging'); root.classList.add('dragging-tile'); }
-    d.el.style.transform = `translate(${dx}px,${dy}px) scale(.97)`; edges(zone(e.clientX));
+    d.el.style.transform = `translate(${dx}px,${dy}px) scale(.97)`; edges(zone(e.clientX, e.clientY));
   });
   const end = (e) => {
     if (!d || e.pointerId !== d.pid) return;
-    const z = d.moved ? zone(e.clientX) : 0, { el, id } = d; d = null; edges(0);
+    const z = d.moved ? zone(e.clientX, e.clientY) : 0, { el, id, moved } = d; d = null; edges(0);
     el.classList.remove('dragging'); root.classList.remove('dragging-tile'); el.style.transform = '';
-    if (z) sendTab(id, neighbour(z));
+    if (z) { sendTab(id, neighbour(z === 2 ? 0 : z)); return; }
+    if (PHONE && !moved && e.type === 'pointerup') { // double-tap a header: that panel fills the screen (again: back to sharing)
+      const now = Date.now();
+      if (lastTap.id === id && now - lastTap.t < 350) { pmax = pmax === id ? null : id; lastTap = { id: '', t: 0 }; layoutTiles(); } else lastTap = { id, t: now };
+    }
   };
   document.addEventListener('pointerup', end); document.addEventListener('pointercancel', end);
 })();
@@ -769,7 +794,7 @@ function tickAgo() {
   document.querySelectorAll('[data-until]').forEach((e) => { const v = until(e.getAttribute('data-until')); if (e.textContent !== v) e.textContent = v; });
   updateDueBadge();
 }
-function render() { if (!unlocked()) return; renderTiles(); updateUnread(); sync3D(); relay(); if (PHONE) renderPhoneHome(); }
+function render() { if (!unlocked()) return; renderTiles(); updateUnread(); sync3D(); relay(); if (PHONE) phoneDot(); }
 
 // ---------- crypto (encrypted status feed) ----------
 const b64d = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
@@ -950,10 +975,10 @@ window.addEventListener('storage', (e) => {
 });
 
 // ---------- the 3D core (screen 1 only; loaded on demand so screens 2 and 3 never parse three.js) ----------
-let N3 = null, agentsKey = '', runKey = '';
+let N3 = null, n3Loading = false, agentsKey = '', runKey = '';
 function load3D() {
-  if (SEC && !(PHONE && pprefs().globe)) return;
-  if (PHONE) { const pc = $('#coreArea'); pc.removeAttribute('data-n3d-core'); const g = $('#pglobe'); if (g) g.setAttribute('data-n3d-core', ''); }
+  if (SEC && !(PHONE && L.pcore)) return;
+  if (n3Loading) return; n3Loading = true;
   const cv = document.createElement('canvas'); cv.id = 'nova-3d'; cv.setAttribute('aria-hidden', 'true'); document.body.appendChild(cv);
   const s = document.createElement('script'); s.src = '3d/nova-3d.min.js';
   s.onload = () => {
@@ -961,9 +986,9 @@ function load3D() {
       N3 = window.NOVA3D; N3.init({ areas: PHONE ? AREAS.filter((a) => !PHONE_HIDE.has(a.id)) : AREAS });
       if (!N3.state || !document.querySelector('.n3d-node-label')) { root.classList.add('n3d-no-webgl'); N3 = null; }
     } catch (e) { console.info('NOVA 3D unavailable:', e.message); N3 = null; root.classList.add('n3d-no-webgl'); }
-    if (!N3) { if (!PHONE) fallbackCore(); } else { root.classList.add('n3d-on'); agentsKey = ''; sync3D(); updateUnread(); applyPrefs(); N3.setPaused(!unlocked()); }
+    if (!N3) fallbackCore(); else { root.classList.add('n3d-on'); agentsKey = ''; sync3D(); updateUnread(); applyPrefs(); N3.setPaused(!unlocked() || (PHONE && !L.pcore)); }
   };
-  s.onerror = () => { root.classList.add('n3d-no-webgl'); if (!PHONE) fallbackCore(); };
+  s.onerror = () => { root.classList.add('n3d-no-webgl'); fallbackCore(); };
   document.body.appendChild(s);
 }
 document.addEventListener('nova:open', (e) => openTab(e.detail.area));
@@ -987,7 +1012,8 @@ function sync3D() {
 function fallbackCore() {
   const nav = $('#corenav'); if (!nav) return;
   root.classList.add('n3d-fallback');
-  nav.innerHTML = `<div class="fring">${coreRing()}</div>` + AREAS.map((a, i) => { const r = (90 - i * 360 / AREAS.length) * Math.PI / 180; return `<button type="button" class="fnode ${a.muted ? 'muted' : ''} ${a.primary ? 'primary' : ''} ${a.group ? 'g-' + a.group : ''}" data-open="${a.id}" style="left:${(50 + Math.cos(r) * 41).toFixed(1)}%;top:${(50 - Math.sin(r) * 41).toFixed(1)}%">${ic(a.icon, 18)}<span>${esc(a.label)}</span><b class="nb" hidden></b></button>`; }).join('');
+  const list = PHONE ? AREAS.filter((a) => !PHONE_HIDE.has(a.id)) : AREAS;
+  nav.innerHTML = `<div class="fring">${coreRing()}</div>` + list.map((a, i) => { const r = (90 - i * 360 / list.length) * Math.PI / 180; return `<button type="button" class="fnode ${a.muted ? 'muted' : ''} ${a.primary ? 'primary' : ''} ${a.group ? 'g-' + a.group : ''}" data-open="${a.id}" style="left:${(50 + Math.cos(r) * 41).toFixed(1)}%;top:${(50 - Math.sin(r) * 41).toFixed(1)}%">${ic(a.icon, 18)}<span>${esc(a.label)}</span><b class="nb" hidden></b></button>`; }).join('');
   updateUnread();
 }
 document.addEventListener('click', (e) => { const b = e.target.closest('#corenav [data-open]'); if (b) openTab(b.dataset.open); });
@@ -1001,11 +1027,9 @@ $('#menuBtn').innerHTML = ic('menu', 20, 'currentColor', 1.8);
 function openMenu() {
   const m = $('#menu');
   const item = (attr, icon, text, sub = '') => `<button type="button" role="menuitem" ${attr}>${ic(icon, 17)}<span>${text}${sub ? `<small>${sub}</small>` : ''}</span></button>`;
+  const pc = pairedCount() > 0 || phoneOn();
   m.innerHTML = PHONE ? [
-    item('data-open-tab="chat"', 'chat', 'Chat'),
-    item('data-phome', 'home', 'Home'),
-    item('data-open-tab="settings"', 'gear', 'Settings'),
-    item('data-clear', 'clear', 'Close all panels', 'On this phone'),
+    item('data-psettings', 'gear', 'Settings', esc(syncText().title)),
     item('data-unpair', 'lock', 'Unpair this phone'),
   ].join('') : [
     item('data-open-tab="chat"', 'chat', 'Chat'),
@@ -1014,6 +1038,7 @@ function openMenu() {
     item('data-clear', 'clear', 'Clear screens', 'Close every open tab'),
     item('data-open-tab="settings"', 'gear', 'Settings'),
     item('data-ident', 'grid', 'Identify screens'),
+    pc ? item('data-corephone', 'phone', L.pcore ? 'Take the core off the phone' : 'Show the core on the phone', L.pcore ? 'It stays on the centre screen' : 'It stays on the centre screen too') : '',
     item('data-lock', 'lock', 'Lock'),
   ].join('');
   m.hidden = false; $('#menuBtn').setAttribute('aria-expanded', 'true'); root.classList.add('awake');
@@ -1026,7 +1051,7 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(
 
 // global actions (menu, Settings tab, toasts)
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-open-tab],[data-fullscreen],[data-place],[data-setup],[data-clear],[data-ident],[data-lock],[data-conn],[data-recheck],[data-perfretry],[data-fsgo],[data-fsno],[data-openmore],[data-notex],[data-pair],[data-revoke],[data-phome],[data-pv],[data-psend],[data-psendto],[data-unpair],[data-pglobe],[data-pinstall]');
+  const t = e.target.closest('[data-open-tab],[data-fullscreen],[data-place],[data-setup],[data-clear],[data-ident],[data-lock],[data-conn],[data-recheck],[data-perfretry],[data-fsgo],[data-fsno],[data-openmore],[data-notex],[data-pair],[data-revoke],[data-psettings],[data-corephone],[data-coreback],[data-unpair],[data-pinstall]');
   if (!t) return;
   if (t.closest('#menu')) closeMenu();
   if (phoneClick(t)) return;
@@ -1203,8 +1228,8 @@ if (SETUP) { const u = new URL(location.href); u.searchParams.delete('setup'); h
 function showApp() {
   window.__novaShown = true; root.classList.remove('locked'); $('#lock').hidden = true; $('#stage').removeAttribute('aria-hidden'); $('#menuBtn').hidden = false;
   if (PHONE) $('#lock').classList.remove('pairing');
-  if (N3) N3.setPaused(false);
-  render(); startLive();
+  if (N3) N3.setPaused(PHONE && !L.pcore);
+  render(); startLive(); if (PHONE) phoneCore();
   if (SEC && !PHONE) { showScreenLabel(); if (SETUP && !isFs()) fsAsk(); }
 }
 async function autoUnlock() {
@@ -1257,7 +1282,7 @@ function onSyncState(s, tries) {
     // the handshake keeps failing while we're online: maybe the pairing was removed or expired
     if ((s === 'closed' || s === 'noauth') && tries >= 2 && navigator.onLine !== false && Date.now() - authCheckAt > 60000) { authCheckAt = Date.now(); api('/devices').catch(checkRevoked); }
   }
-  if (unlocked()) { renderTiles(); if (PHONE) renderPhoneHome(); }
+  if (unlocked()) { renderTiles(); if (PHONE) phoneDot(); }
 }
 function onRemote(m) {
   switch (m.t) {
@@ -1287,7 +1312,7 @@ function onRemote(m) {
     case 'revoked': if (PHONE) phoneLock('This phone was removed from NOVA on your computer. Pair it again any time.'); return;
     default: return;
   }
-  if (unlocked()) { renderTiles(); if (PHONE) renderPhoneHome(); }
+  if (unlocked()) { renderTiles(); if (PHONE) phoneDot(); }
 }
 // what the phone gets from screen 1: the decrypted status (Tasks, AI Team), GitHub, Calo, agent lists and the chat it sent.
 // Replies and Brightspace the phone fetches itself with its own device token; nothing here is ever a token.
@@ -1342,9 +1367,9 @@ function phoneGroup() {
   const devs = remote.devices, on = new Set(remote.phones.map((p) => p.id));
   const rows = devs == null ? '<div class="empty">Loading…</div>' : devs.length ? devs.map((d) => `<div class="crow"><span class="dot ${on.has(d.id) ? 'ok' : 'idle'}"></span><div class="grow"><b>${esc(d.name)}</b><div class="mutedt sm">${on.has(d.id) ? 'Connected now' : 'Last seen <span data-ago="' + esc(d.lastSeen) + '">' + esc(ago(d.lastSeen)) + '</span>'} · paired ${esc(fDay.format(new Date(d.created)))}</div></div><button type="button" class="btn sm danger" data-revoke="${esc(d.id)}" data-name="${esc(d.name)}">Remove</button></div>`).join('') : '<div class="mutedt sm">No phone paired yet.</div>';
   return `<div class="sgroup" data-phonegroup><div class="label">Phone · 4th screen</div>
-    <div class="mutedt sm">Your phone becomes screen 4: send any panel to it with the <b>Phone</b> button. Chat, Brightspace, Tasks and Calo sync both ways.</div>
+    <div class="mutedt sm">Your phone is screen 4: it shows the empty grid until you send it something. Use the <b>Phone</b> button on any panel (or key 4), and send panels back from the phone the same way. The core can be shown there too.</div>
     <div class="clist">${rows}</div>
-    <div class="btns wrap"><button type="button" class="btn sm" data-pair>${ic('phone', 15)} Pair phone</button>${remote.st === 'open' ? '<span class="mutedt sm">Sync on</span>' : remote.st === 'connecting' || remote.st === 'closed' ? '<span class="mutedt sm">Sync reconnecting…</span>' : ''}</div></div>`;
+    <div class="btns wrap"><button type="button" class="btn sm" data-pair>${ic('phone', 15)} Pair phone</button>${devs && devs.length ? `<button type="button" class="btn sm" data-corephone>${L.pcore ? 'Take the core off the phone' : 'Show the core on the phone'}</button>` : ''}${remote.st === 'open' ? '<span class="mutedt sm">Sync on</span>' : remote.st === 'connecting' || remote.st === 'closed' ? '<span class="mutedt sm">Sync reconnecting…</span>' : ''}</div></div>`;
 }
 function qrSvg(q) {
   const n = q.getModuleCount(), Q = 4; let d = '';
@@ -1388,7 +1413,7 @@ function onPaired(dev) {
   const box = $('#pairbox');
   if (box && pairing) {
     stopPairing();
-    box.innerHTML = `<div class="paired">${ic('check', 44, COL.ok, 2.2)}<b>Paired with ${esc(dev.name)}</b><span class="mutedt">Your phone is screen 4 now. Use the <b>Phone</b> button on any panel to send it there.</span></div><div class="btns"><button class="btn pri" data-mclose autofocus>Done</button></div>`;
+    box.innerHTML = `<div class="paired">${ic('check', 44, COL.ok, 2.2)}<b>Paired with ${esc(dev.name)}</b><span class="mutedt">Your phone is screen 4 now. Use the <b>Phone</b> button on any panel (or key 4) to send it there.</span></div><div class="btns"><button class="btn pri" data-mclose autofocus>Done</button></div>`;
   }
   bridgeStart(); checkDevices();
 }
@@ -1400,12 +1425,14 @@ async function revokeDevice(id, name) {
 }
 
 // ---------- the phone (screen 4) ----------
-let pview = null, pPrev = null, deferredInstall = null, hideT = 0;
-const pprefs = () => Object.assign({ globe: false }, lsGet(LS.pprefs) || {});
-const PHONE_HOME = ['chat', 'brightspace', 'tasks', 'calo', 'team', 'agents', 'github', 'settings'];
+// NOVA 2.4: the phone behaves like the other screens. It starts as the empty blue grid; panels arrive when they're sent
+// to it (the Phone button or key 4 on the computer) and leave the same way (Left / Centre / Right on each panel, or drag a
+// header to an edge). The core can be shown here too (it always stays on the centre screen). A tiny dot at the bottom
+// opens Settings / Unpair. No WebGL unless the core is on the phone.
+let deferredInstall = null, hideT = 0, pmax = null;
 const devName = () => { const u = navigator.userAgent, m = u.match(/Android [\d.]+; (?:[^;)]+; )?([^;)]+?)(?: Build[^;)]*)?\)/); return /iPhone/.test(u) ? 'iPhone' : /iPad/.test(u) ? 'iPad' : /Android/.test(u) ? (m && m[1].length > 2 && !/^(K|wv)$/.test(m[1]) ? m[1].trim() : 'Android phone') : 'Phone'; };
 const standalone = () => (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
-window.addEventListener('beforeinstallprompt', (e) => { if (!PHONE) return; e.preventDefault(); deferredInstall = e; renderTiles(); });
+window.addEventListener('beforeinstallprompt', (e) => { if (!PHONE) return; e.preventDefault(); deferredInstall = e; });
 function checkRevoked(e) {
   if (PHONE && e && e.status === 401) { phoneLock('This phone isn’t paired any more (it was removed or the pairing ran out). Pair it again from NOVA on your computer.'); return true; }
   return false;
@@ -1422,101 +1449,54 @@ async function phoneFetch(what) {
 function syncText() {
   if (navigator.onLine === false || remote.st === 'offline') return { cls: 'warn', title: 'No connection', sub: 'Showing what was saved. NOVA reconnects by itself.' };
   if (deskOn()) return { cls: 'ok', title: 'Linked to your computer', sub: 'Panels, chat and tasks sync live.' };
-  if (remote.st === 'open') return { cls: 'idle', title: 'Computer not open', sub: 'Chat, Brightspace and Calo still work here.' };
+  if (remote.st === 'open') return { cls: 'idle', title: 'Computer not open', sub: 'Panels here still work. Sending needs NOVA open on your computer.' };
   return { cls: 'warn', title: 'Reconnecting…', sub: 'Trying again in a moment.' };
 }
-function renderPhoneHome() {
+// the menu dot doubles as the sync light: green linked, grey computer closed, amber offline / reconnecting
+function phoneDot() {
   if (!PHONE) return;
-  const st = syncText(), ps = $('[data-psync]');
-  if (ps) patch(ps, `<span class="dot ${st.cls}"></span>${esc(st.title)}`);
-  const nav = $('#corenav'); if (!nav) return;
-  const un = unreadCount(), n3 = dueSoonCount(3), s = schoolItems(), t = tasks(), c = state.calo, a = agents();
-  const next = s && s.up.filter(isDue).find((x) => Date.parse(x.due) > Date.now());
-  const sub = {
-    chat: un ? `${un} new repl${un === 1 ? 'y' : 'ies'}` : (conn.inbox && conn.inbox.length ? 'Last reply ' + ago(conn.inbox.reduce((m, r) => Math.max(m, Date.parse(r.time) || 0), 0)) : 'Talk to your team'),
-    brightspace: !s ? (conn.school && conn.school.err ? 'Not loaded' : 'Loading…') : n3 ? `${n3} due in 3 days` : next ? 'Next: ' + until(next.due) : 'Nothing due soon',
-    tasks: state.status ? `${t.filter((x) => !x.done).length} left of ${t.length}` : 'Syncs from your computer',
-    calo: !c.checkedAt ? 'Checking…' : c.online ? `Online${c.version ? ' · v' + String(c.version).replace(/^v/, '') : ''}${c.ms ? ' · ' + c.ms + ' ms' : ''}` : 'Offline',
-    team: state.status ? `${a.filter((x) => x.status === 'working').length} working${a.some((x) => x.status === 'needs_you') ? ' · needs you' : ''}` : 'Syncs from your computer',
-    agents: 'Cursor · Copilot',
-    github: state.gh.run ? (runState() === 'ok' ? 'Deploy live' : runState() === 'bad' ? 'Deploy failed' : 'Deploying…') : 'Repo activity',
-    settings: st.title,
-  };
-  const warn = { brightspace: n3 > 0, calo: c.checkedAt && !c.online, team: a.some((x) => x.status === 'needs_you') };
-  patch(nav, PHONE_HOME.map((id) => { const ar = AREA[id];
-    return `<button type="button" class="pnode ${id === 'chat' ? 'primary' : ''} ${warn[id] ? 'warn' : ''}" data-open="${id}">${ic(ar.icon, id === 'chat' ? 26 : 22)}<span class="pl"><b>${esc(ar.label)}</b><small>${esc(sub[id] || '')}</small></span>${id === 'chat' || id === 'brightspace' ? '<b class="nb" hidden></b>' : ''}</button>`; }).join(''));
-  updateUnread();
+  const b = $('#menuBtn'); if (!b) return;
+  const st = syncText();
+  if (b.dataset.psync !== st.cls) b.dataset.psync = st.cls;
+  const lab = 'NOVA menu · ' + st.title; if (b.getAttribute('aria-label') !== lab) { b.setAttribute('aria-label', lab); b.title = st.title; }
 }
-function renderPhoneBar(list) {
-  const bar = $('#pbar'); if (!bar) return;
-  bar.hidden = !list.length;
-  patch(bar, `<button type="button" class="pb ${pview ? '' : 'on'}" data-phome aria-label="Home">${ic('home', 20)}<span>Home</span></button>` +
-    list.map((t) => `<button type="button" class="pb ${pview === t.id ? 'on' : ''}" data-pv="${t.id}">${ic(AREA[t.id].icon, 20)}<span>${esc(AREA[t.id].label)}</span>${t.local ? '' : '<i class="sent" title="Sent from your computer"></i>'}${t.id === 'chat' || t.id === 'brightspace' ? '<b class="nb" hidden></b>' : ''}</button>`).join(''));
+// the core on the phone: shown only while the computer (or the phone) put it here
+function phoneCore() {
+  if (!PHONE) return;
+  const on = !!L.pcore && unlocked();
+  root.classList.toggle('pcore', on);
+  if (on) { if (!N3 && !n3Loading) load3D(); else if (N3) { N3.setPaused(false); N3.relayout(300); } }
+  else if (N3) N3.setPaused(true);
 }
-function phoneArrivals(ids) {
-  const shared = L.tabs.filter((t) => t.pos === PH && !PHONE_HIDE.has(t.id)).map((t) => t.id);
-  if (pPrev) {
-    const fresh = shared.filter((id) => !pPrev.includes(id) && !PL.includes(id));
-    if (fresh.length) {
-      const id = fresh[fresh.length - 1]; pview = id;
-      note(`<b>${esc(AREA[id].label)} arrived</b><span class="mutedt">Sent from your computer</span>`, 4000);
-      try { if (navigator.vibrate) navigator.vibrate(25); } catch (e) {}
-      setTimeout(() => { const el = tileEl(id); if (el) { el.classList.remove('arrive'); void el.offsetWidth; el.classList.add('arrive'); } }, 0);
-      if (id === 'brightspace' && (!conn.school || Date.now() - (conn.school.at || 0) > SCHOOL_MS - 5000)) refreshSchool();
-    }
-  }
-  pPrev = shared;
+function setCorePhone(on) {
+  if (!!L.pcore === !!on) return;
+  setLayout(L.tabs, !!on);
+  if (!PHONE && on) note(phoneOn() ? '<b>Core sent to your phone</b><span class="mutedt">It stays here on the centre screen too.</span>' : '<b>Core sent to your phone</b><span class="mutedt">Your phone isn’t open right now. It’ll be there next time you open NOVA on it.</span>', 6000);
 }
-function phoneOpen(id) {
-  if (PHONE_HIDE.has(id)) return;
-  if (!mine().some((t) => t.id === id)) { PL = PL.filter((x) => x !== id).concat(id); lsSet(LS.plocal, PL); }
-  pview = id; renderTiles(); updateUnread();
-  const el = tileEl(id); if (el) { el.classList.add('arrive'); const b = el.querySelector('.tbody'); if (b && id !== 'chat') b.scrollTop = 0; }
-  if (id === 'brightspace' && (!conn.school || Date.now() - (conn.school.at || 0) > SCHOOL_MS - 5000)) refreshSchool();
-  if (id === 'chat') { markSeen(); setTimeout(() => { const lg = $('#tiles .tile[data-tab="chat"] .chatlog'); if (lg) lg.scrollTop = lg.scrollHeight; }, 0); }
-}
-function phoneSend(id, pos) {
-  if (pos === PH) return;
-  if (!deskOn()) { note('<b>Your computer isn’t connected</b><span class="mutedt">Open NOVA on your computer, then try again.</span>'); return; }
-  if (!alive(scrAt(pos))) { note(`<b>${POS_NAME[pos]} screen isn’t open</b><span class="mutedt">Open it on your computer with Set up screens.</span>`); return; }
-  const el = tileEl(id);
-  const go = () => {
-    PL = PL.filter((x) => x !== id); lsSet(LS.plocal, PL); if (pview === id) pview = null;
-    setLayout(L.tabs.filter((x) => x.id !== id).concat({ id, pos }));
-    note(`<b>Sent to the ${POS_NAME[pos].toLowerCase()} screen</b>`, 2500);
-  };
-  if (el && !prefersReduced()) { el.classList.add('throw-u'); setTimeout(go, 170); } else go();
-}
-function phoneSendSheet(id) {
-  const opts = POS.filter((p) => alive(scrAt(p)));
-  modal(`<div class="ph"><h3>Send ${esc(AREA[id].label)}<small>to your computer</small></h3><button class="x" data-mclose aria-label="Close">✕</button></div>
-   <div class="psheet">${opts.map((p) => `<button type="button" class="btn big" data-psendto="${p}" data-id="${id}">${ic('monitor', 20)} ${POS_NAME[p]} screen${scrAt(p) === 1 ? ' <small>core</small>' : ''}</button>`).join('') || '<div class="mutedt">No screens open on your computer.</div>'}</div>
-   <div class="btns" style="margin-top:.8rem"><button class="btn" data-mclose>Cancel</button></div>`, 'sheet');
-}
+function renderCoreChip() { if (!PHONE) root.classList.toggle('core-on-phone', !!L.pcore); }
 function installHtml() {
   if (standalone()) return '<div class="mutedt sm">Installed on your home screen.</div>';
   if (deferredInstall) return '<div class="btns"><button type="button" class="btn sm" data-pinstall>Add NOVA to home screen</button></div>';
   return /iPhone|iPad/.test(navigator.userAgent) ? '<div class="mutedt sm">Install: in Safari tap <b>Share</b> → <b>Add to Home Screen</b>.</div>' : '<div class="mutedt sm">Install: in Chrome tap <b>⋮</b> → <b>Install app</b> (or Add to Home screen).</div>';
 }
 function tabPhoneSettings() {
-  const d = conn.device || {}, st = syncText(), g = pprefs().globe;
-  const opt = (v, title, desc) => `<button type="button" class="opt ${g === v ? 'on' : ''}" data-pglobe="${v ? 1 : 0}"><div><b>${title}</b><div class="mutedt sm">${desc}</div></div></button>`;
+  const d = conn.device || {}, st = syncText();
   return `<div class="sgroup"><div class="label">Sync</div><div class="crow"><span class="dot ${st.cls}"></span><div class="grow"><b>${esc(st.title)}</b><div class="mutedt sm">${esc(st.sub)}</div></div></div></div>
-   <div class="sgroup"><div class="label">This phone</div><div class="crow"><span class="dot ok"></span><div class="grow"><b>${esc(d.name || 'Phone')}</b><div class="mutedt sm">Paired${d.pairedAt ? ' ' + esc(fDay.format(new Date(d.pairedAt))) : ''} · works until ${esc(fDay.format(new Date(d.expiresAt || Date.now())))} unless you remove it</div></div></div>${installHtml()}</div>
-   <div class="sgroup"><div class="label">Core</div>${opt(false, 'Flat core (recommended)', 'Lightest on battery. No 3D.')}${opt(true, '3D globe', 'The spinning globe from your desktop. Uses more battery.')}</div>
+   <div class="sgroup"><div class="label">This phone · screen 4</div><div class="crow"><span class="dot ok"></span><div class="grow"><b>${esc(d.name || 'Phone')}</b><div class="mutedt sm">Paired${d.pairedAt ? ' ' + esc(fDay.format(new Date(d.pairedAt))) : ''} · works until ${esc(fDay.format(new Date(d.expiresAt || Date.now())))} unless you remove it</div></div></div>
+   <div class="mutedt sm">Send panels here with the <b>Phone</b> button on your computer (or key 4). Send them back with Left / Centre / Right on each panel, or drag a panel’s header to the left, right or top edge. Double-tap a header to make it fill the screen.</div>${installHtml()}</div>
+   <div class="sgroup"><div class="label">Core</div><div class="btns"><button type="button" class="btn sm" data-corephone>${L.pcore ? 'Take the core off this phone' : 'Show the core here'}</button></div><div class="mutedt sm">${L.pcore ? 'The 3D core is on this phone (and still on the centre screen).' : 'Off: no 3D here, which saves battery. It stays on the centre screen.'}</div></div>
    <div class="sgroup"><div class="label">Unpair</div><div class="btns"><button type="button" class="btn sm danger" data-unpair>${ic('lock', 15)} Unpair this phone</button></div><div class="mutedt sm">You can also remove it on your computer: Settings → Phone.</div></div>
    <div class="tfoot">NOVA ${VERSION} · phone · screen 4</div>`;
 }
+const phoneSettings = () => modal(`<div class="ph"><h3>Settings<small>this phone</small></h3><button class="x" data-mclose aria-label="Close">✕</button></div><div class="psettings">${tabPhoneSettings()}</div>`, 'sheet');
 function phoneClick(t) {
   if (t.hasAttribute('data-pair')) { pairPhone(); return true; }
   if (t.hasAttribute('data-revoke')) { revokeDevice(t.getAttribute('data-revoke'), t.getAttribute('data-name')); return true; }
+  if (t.hasAttribute('data-corephone')) { setCorePhone(!L.pcore); if (PHONE && $('#modal .psettings')) phoneSettings(); return true; }
+  if (t.hasAttribute('data-coreback')) { setCorePhone(false); return true; }
   if (!PHONE) return false;
-  if (t.hasAttribute('data-phome')) { pview = null; renderTiles(); renderPhoneHome(); return true; }
-  if (t.hasAttribute('data-pv')) { phoneOpen(t.getAttribute('data-pv')); return true; }
-  if (t.hasAttribute('data-psend')) { const tile = t.closest('.tile'); if (tile) phoneSendSheet(tile.dataset.tab); return true; }
-  if (t.hasAttribute('data-psendto')) { closeModal(); sendTab(t.getAttribute('data-id'), t.getAttribute('data-psendto')); return true; }
-  if (t.hasAttribute('data-pglobe')) { const v = t.getAttribute('data-pglobe') === '1'; if (v !== pprefs().globe) { lsSet(LS.pprefs, { ...pprefs(), globe: v }); location.reload(); } return true; }
-  if (t.hasAttribute('data-pinstall')) { if (deferredInstall) { deferredInstall.prompt(); deferredInstall.userChoice.finally(() => { deferredInstall = null; renderTiles(); }); } return true; }
+  if (t.hasAttribute('data-psettings')) { phoneSettings(); return true; }
+  if (t.hasAttribute('data-pinstall')) { if (deferredInstall) { deferredInstall.prompt(); deferredInstall.userChoice.finally(() => { deferredInstall = null; if ($('#modal .psettings')) phoneSettings(); }); } return true; }
   if (t.hasAttribute('data-unpair')) {
     if (!confirm('Unpair this phone? You’ll need a new pairing code from your computer to use NOVA here again.')) return true;
     const id = conn.device && conn.device.id;
@@ -1527,28 +1507,29 @@ function phoneClick(t) {
 }
 function phoneLive() {
   const vis = () => document.visibilityState === 'visible';
+  const here = (id) => L.tabs.some((t) => t.id === id && t.pos === PH);
   bridgeStart();
-  phoneFetch({ status: true, inbox: true }); refreshSchool(); checkCalo();
+  phoneFetch({ status: true, inbox: true }); if (here('brightspace')) refreshSchool(); checkCalo();
   timers.push(setTimeout(() => { if (!relayAlive()) refreshGitHub(); }, 6000));
   // replies are pushed the moment a bot answers; this slow poll only covers a dropped connection
   timers.push(setInterval(() => { if (vis() && remote.st !== 'open') phoneFetch({ inbox: true }); }, 60000));
   timers.push(setInterval(() => { if (!vis()) return; checkCalo(); if (!relayAlive()) refreshGitHub(); phoneFetch({ status: true, inbox: remote.st === 'open' }); }, REFRESH_MS));
-  timers.push(setInterval(() => { if (vis()) refreshSchool(); }, SCHOOL_MS));
+  timers.push(setInterval(() => { if (vis() && here('brightspace')) refreshSchool(); }, SCHOOL_MS));
 }
 document.addEventListener('visibilitychange', () => {
   if (!PHONE || !unlocked()) return;
   clearTimeout(hideT);
-  if (document.hidden) { hideT = setTimeout(() => { if (document.hidden && sync) sync.stop(); }, 45000); return; } // asleep: let the socket go (battery)
-  bridgeStart(); if (sync) sync.now();
+  if (document.hidden) { if (N3) N3.setPaused(true); hideT = setTimeout(() => { if (document.hidden && sync) sync.stop(); }, 45000); return; } // asleep: let the socket go (battery)
+  bridgeStart(); if (sync) sync.now(); phoneCore();
   if (Date.now() - (conn.inboxAt || 0) > 15000) phoneFetch({ inbox: true });
-  if (!conn.school || Date.now() - (conn.school.at || 0) > SCHOOL_MS) refreshSchool();
+  if (L.tabs.some((t) => t.id === 'brightspace' && t.pos === PH) && (!conn.school || Date.now() - (conn.school.at || 0) > SCHOOL_MS)) refreshSchool();
   checkCalo();
 });
 function phoneLock(msg) {
   window.__novaShown = false; bridgeStop(); forgetDevice(); stopLive(); closeModal(); closeMenu(); hideNote();
   [LS.psnap, LS.sent, LS.draft, LS.plocal, LS.playout, 'nova.phone.inbox', 'nova.phone.school', LS.seen].forEach((k) => localStorage.removeItem(k));
-  state.status = null; conn.school = undefined; conn.cursor = undefined; conn.copilot = undefined; PL = []; pview = null; pPrev = null; L = { seq: 0, tabs: [] }; relayAt = 0;
-  $('#tiles').replaceChildren(); root.classList.remove('has-tiles'); const bar = $('#pbar'); if (bar) bar.hidden = true;
+  state.status = null; conn.school = undefined; conn.cursor = undefined; conn.copilot = undefined; pmax = null; tilesDrawn = false; L = { seq: 0, tabs: [], pcore: false }; relayAt = 0;
+  $('#tiles').replaceChildren(); root.classList.remove('has-tiles', 'pcore', 'pmaxed'); if (N3) N3.setPaused(true);
   root.classList.add('locked'); const lk = $('#lock'); lk.hidden = false; lk.classList.add('pairing'); $('#stage').setAttribute('aria-hidden', 'true'); $('#menuBtn').hidden = true;
   $('#locksub').textContent = 'Pair this phone';
   const inp = $('#pass'); inp.type = 'text'; inp.placeholder = 'Pairing code'; inp.setAttribute('autocomplete', 'one-time-code'); inp.setAttribute('autocapitalize', 'characters'); inp.setAttribute('maxlength', '12'); inp.setAttribute('aria-label', 'Pairing code'); inp.value = '';
@@ -1565,15 +1546,16 @@ async function phonePairSubmit() {
   if (r.ok) phonePaired(); else { m.className = 'lockmsg err'; m.textContent = r.msg; }
 }
 function phonePaired() {
-  showApp(); renderPhoneHome();
-  note(`<b>Paired</b><span class="mutedt">This phone is screen 4 of NOVA now.${standalone() ? '' : ' Add it to your home screen from Settings.'}</span>`, 6000);
+  showApp();
+  note(`<b>Paired · this is screen 4</b><span class="mutedt">Send a panel here with the Phone button on your computer.${standalone() ? '' : ' Add NOVA to your home screen from the dot at the bottom → Settings.'}</span>`, 7000);
 }
 function phoneBoot() {
   root.classList.add('is-phone');
-  $('#coreArea').innerHTML = `<div class="pcore"><div class="pring">${coreRing()}</div><div id="pglobe"></div><div class="pclock"><b data-clock></b><span data-ampm></span></div></div><div class="psync" data-psync></div><nav class="pnodes" id="corenav" aria-label="Open a panel"></nav>`;
-  $('#coreArea').setAttribute('aria-label', 'NOVA phone home');
-  document.body.insertAdjacentHTML('beforeend', '<nav class="pbar" id="pbar" aria-label="Open panels" hidden></nav>');
-  tick();
+  const ca = $('#coreArea');
+  ca.insertAdjacentHTML('beforebegin', `<div class="pcorebar"><span class="pctitle">Core<small>also on centre</small></span><nav class="sendto" aria-label="Core"><button type="button" class="st" data-coreback title="Take the core off the phone (it stays on the centre screen)">Centre</button><button type="button" class="st ph on" disabled aria-pressed="true" title="On this phone">${ic('phone', 14)}</button></nav><button type="button" class="tx" data-coreback title="Close the core here" aria-label="Close the core here">${ic('clear', 18, 'currentColor', 2)}</button></div>`);
+  ca.setAttribute('aria-label', 'NOVA core on the phone: tap a node to open it here');
+  document.body.insertAdjacentHTML('beforeend', '<div class="edge t" id="edgeT" aria-hidden="true"><span></span></div>');
+  $('#menuBtn').innerHTML = '<i class="pdot" aria-hidden="true"></i>';
   // the one-time pairing token arrives in the URL fragment (#pair=…). Take it out of the address bar and history right away.
   const tok = new URLSearchParams(location.hash.slice(1)).get('pair');
   if (location.hash) history.replaceState(null, '', location.pathname + location.search);
@@ -1585,9 +1567,8 @@ function phoneBoot() {
     const sn = lsGet(LS.psnap); if (sn) takePhoneSnap(sn, true);
     const ib = lsGet('nova.phone.inbox'); if (ib && Array.isArray(ib.items)) { conn.inbox = ib.items; conn.inboxAt = 0; lastNewest = ib.items.reduce((m, r) => Math.max(m, Date.parse(r.time) || 0), 0); }
     const sc = lsGet('nova.phone.school'); if (sc && sc.data) conn.school = { ...sc, at: 0 };
-    showApp(); renderPhoneHome();
+    showApp();
   } else phoneLock();
-  if (pprefs().globe) load3D();
 }
 
 // ---------- boot ----------
