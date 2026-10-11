@@ -1,0 +1,17 @@
+{
+  "id": "./?screen=phone",
+  "name": "NOVA Phone",
+  "short_name": "NOVA",
+  "description": "Tyler's NOVA command center on the phone: chat, school, tasks and Calo, synced with the desktop screens.",
+  "start_url": "./?screen=phone",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#03080f",
+  "theme_color": "#03080f",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

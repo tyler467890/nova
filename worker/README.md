@@ -38,6 +38,14 @@ Due this week, in Halifax time (jq):
 (run with `TZ=America/Halifax`). Due times are end-of-day deadlines, e.g. `02:59:59Z` is 11:59 PM Atlantic the day before.
 - CORS: only https://tyler467890.github.io and http://localhost:* (tests).
 
+## Phone sync (NOVA 2.3)
+
+- `POST /pair/start` (desktop session) returns a one-time pairing token plus an 8-char code, 5 min TTL, stored hashed in the `NovaRoom` DO.
+- `POST /pair/claim {secret,name}` (no auth, rate-limited per IP) returns a device session token (`typ:dev`, 180 days, checked against the DO registry on every request).
+- `GET /devices`, `POST /devices/revoke {id}`: list and revoke phones. Revoking kicks live sockets (close 4001).
+- `GET /sync` WebSocket upgrade with subprotocols `nova-sync`, `tok.<session>`. It relays only allowlisted message types between desktop and phone.
+- Device tokens cannot call `/pair/start` or `/controls`.
+
 ## Secrets (names only; values are never committed)
 NOVA_PASSPHRASE_HASH, SESSION_KEY, INBOX_KEY, plus optional GITHUB_TOKEN, CURSOR_API_KEY,
 GROK_WEBHOOK_URL, GROK_WEBHOOK_KEY, NOTION_TOKEN, NOTION_TASKS_DB, BRIGHTSPACE_ICAL_URL.

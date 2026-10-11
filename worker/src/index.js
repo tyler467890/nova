@@ -5,6 +5,9 @@
 //   INBOX_KEY             bearer key the Grok Bot uses for POST /inbox/result
 //   GITHUB_TOKEN, CURSOR_API_KEY, GROK_WEBHOOK_URL, GROK_WEBHOOK_KEY, NOTION_TOKEN, NOTION_TASKS_DB (optional integrations)
 //   BRIGHTSPACE_ICAL_URL  private NSCC Brightspace calendar feed (.ics) for GET /school/assignments
+// Phone (NOVA 2.3): POST /pair/start -> one-time pairing token (5 min) shown as a QR on the desktop; the phone trades it at
+// POST /pair/claim for its own revocable device token. GET /sync is a WebSocket into the NovaRoom Durable Object, which
+// relays the desktop's screen messages to the phone and back (hibernation API, nothing stored but the device list).
 
 const SESSION_TTL = 12 * 3600;            // seconds
 const LOGIN_MAX = 5, LOGIN_WINDOW = 900;  // 5 wrong tries per 15 minutes per IP (IPv6: per /48)
@@ -72,23 +75,33 @@ async function checkPassphrase(pass, stored) {
 async function hmacKey(secret) {
   return crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
 }
-async function makeSession(env) {
+async function makeSession(env, extra = null, ttl = SESSION_TTL) {
   const now = Math.floor(Date.now() / 1000);
-  const payload = b64u(enc.encode(JSON.stringify({ sub: 'tyler', iat: now, exp: now + SESSION_TTL, n: crypto.randomUUID() })));
+  const payload = b64u(enc.encode(JSON.stringify({ sub: 'tyler', iat: now, exp: now + ttl, n: crypto.randomUUID(), ...(extra || {}) })));
   const sig = await crypto.subtle.sign('HMAC', await hmacKey(env.SESSION_KEY), enc.encode(payload));
-  return { token: payload + '.' + b64u(sig), expiresAt: (now + SESSION_TTL) * 1000 };
+  return { token: payload + '.' + b64u(sig), expiresAt: (now + ttl) * 1000 };
 }
-async function verifySession(req, env) {
+async function verifyToken(tok, env) {
   if (!env.SESSION_KEY) fail(503, 'not_configured', { configured: false, need: 'SESSION_KEY' });
-  const m = (req.headers.get('Authorization') || '').match(/^Bearer ([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/);
+  const m = String(tok || '').match(/^([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/);
   if (!m) fail(401, 'unauthorized');
   let ok = false;
   try { ok = await crypto.subtle.verify('HMAC', await hmacKey(env.SESSION_KEY), b64ud(m[2]), enc.encode(m[1])); } catch { ok = false; }
   if (!ok) fail(401, 'unauthorized');
   let p; try { p = JSON.parse(new TextDecoder().decode(b64ud(m[1]))); } catch { fail(401, 'unauthorized'); }
   if (!p || typeof p.exp !== 'number' || p.exp < Date.now() / 1000) fail(401, 'session_expired');
+  // a phone's device token is only good while the device is still paired (revocable in Settings > Devices)
+  if (p.typ === 'dev') { const d = await roomCall(env, '/device/check', { id: p.dev }); if (!d.ok) fail(401, 'device_revoked'); }
+  else if (p.typ) fail(401, 'unauthorized');
   return p;
 }
+async function verifySession(req, env) {
+  const m = (req.headers.get('Authorization') || '').match(/^Bearer (\S+)$/);
+  if (!m) fail(401, 'unauthorized');
+  return verifyToken(m[1], env);
+}
+// pairing, device management and remote controls need the full (passphrase) session, not a phone's device token
+const requireDesktop = (p) => { if (p.typ === 'dev') fail(403, 'desktop_only', { message: 'Do this from NOVA on your computer.' }); };
 
 // ---------- KV helpers ----------
 const kvJson = async (env, key, dflt) => { try { return (await env.NOVA_KV.get(key, 'json')) ?? dflt; } catch { return dflt; } };
@@ -242,6 +255,7 @@ async function inboxResult(req, env) {
   const b = await body(req);
   const item = { request_id: str(b.request_id, 'request_id', 100, false) || null, text: str(b.text, 'text'), time: new Date().toISOString() };
   await pushList(env, 'inbox', item, INBOX_MAX);
+  try { await roomCall(env, '/notify', { t: 'inbox', time: item.time }); } catch {} // push: connected screens refetch /inbox now
   return { ok: true };
 }
 
@@ -411,6 +425,151 @@ async function status(env) {
   };
 }
 
+
+// ---------- Phone: pairing, devices and the sync room (one NovaRoom Durable Object for Tyler) ----------
+const PAIR_TTL = 5 * 60 * 1000;            // a pairing QR / code works once, for 5 minutes
+const DEVICE_TTL = 180 * 86400;            // a phone's device token lasts 180 days unless revoked sooner
+const MAX_DEVICES = 5, MAX_SOCKETS = 12, MAX_MSG = 512 * 1024;
+const PAIR_FAIL_MAX = 10;                  // wrong pairing codes per 15 min per IP
+const PAIR_ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 8 typed characters (40 bits), no 0/O/1/I
+const RELAY = new Set(['snap', 'layout', 'flash', 'ping', 'scr', 'chat', 'hello']); // the BroadcastChannel messages that cross devices
+const DESKTOP_ONLY = new Set(['snap', 'scr']);
+const sha = async (s) => b64u(await crypto.subtle.digest('SHA-256', enc.encode(String(s))));
+const roomStub = (env) => env.NOVA_ROOM.get(env.NOVA_ROOM.idFromName('tyler'));
+async function roomCall(env, path, data) {
+  const r = await roomStub(env).fetch('https://room' + path, { method: 'POST', body: JSON.stringify(data || {}) });
+  return r.json();
+}
+const devName = (v) => String(v || '').replace(/[^\w .,'()+-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 40) || 'Phone';
+const limiter = async (env, name, op, max) => (await env.LOGIN_LIMITER.get(env.LOGIN_LIMITER.idFromName(name)).fetch(`https://limiter/${op}?max=${max}`, { method: 'POST' })).json();
+const ipBucket = (req) => { const ip = req.headers.get('CF-Connecting-IP') || 'unknown'; return ip.includes(':') ? ip.split(':').slice(0, 3).join(':') + '::/48' : ip; };
+
+export class NovaRoom {
+  constructor(state, env) {
+    this.state = state; this.env = env;
+    // keep-alive pings are answered without waking the object (hibernation stays cheap)
+    try { state.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong')); } catch {}
+  }
+  async devices() { return (await this.state.storage.get('devices')) || {}; }
+  online() { return this.state.getWebSockets().filter((w) => w.readyState === 1).map((w) => ({ w, a: w.deserializeAttachment() || {} })); }
+  send(w, m) { try { w.send(typeof m === 'string' ? m : JSON.stringify(m)); } catch {} }
+  broadcast(m, skip = []) { const s = JSON.stringify(m); for (const { w } of this.online()) if (!skip.includes(w)) this.send(w, s); }
+  presence(skip = []) {
+    const live = this.online().filter(({ w }) => !skip.includes(w)), seen = new Set(), phones = [];
+    live.forEach(({ a }) => { if (a.kind === 'phone' && !seen.has(a.dev)) { seen.add(a.dev); phones.push({ id: a.dev, name: a.name }); } });
+    const m = JSON.stringify({ t: 'presence', desktop: live.filter(({ a }) => a.kind === 'desktop').length, phones });
+    live.forEach(({ w }) => this.send(w, m));
+  }
+  kick(dev) {
+    const gone = this.state.getWebSockets('dev:' + dev);
+    gone.forEach((w) => { this.send(w, { t: 'revoked' }); try { w.close(4001, 'revoked'); } catch {} });
+    return gone;
+  }
+  async fetch(req) {
+    const op = new URL(req.url).pathname, st = this.state.storage, now = Date.now();
+    if (op === '/ws') return this.accept(req);
+    const b = await req.json().catch(() => ({}));
+    if (op === '/pair/start') {
+      const pairs = ((await st.get('pairs')) || []).filter((x) => x.exp > now).slice(-2); // at most 3 open codes
+      const token = b64u(crypto.getRandomValues(new Uint8Array(32)));
+      const code = [...crypto.getRandomValues(new Uint8Array(8))].map((x) => PAIR_ALPHA[x & 31]).join('');
+      pairs.push({ th: await sha(token), ch: await sha(code), exp: now + PAIR_TTL });
+      await st.put('pairs', pairs);
+      return Response.json({ token, code, expiresAt: now + PAIR_TTL });
+    }
+    if (op === '/pair/claim') {
+      const pairs = ((await st.get('pairs')) || []).filter((x) => x.exp > now), h = await sha(b.secret || '');
+      const i = pairs.findIndex((x) => timingSafeEq(x.th, h) | timingSafeEq(x.ch, h));
+      if (i >= 0) pairs.splice(i, 1); // one use only
+      await st.put('pairs', pairs);
+      if (i < 0) return Response.json({ ok: false });
+      const devs = await this.devices();
+      for (const [k, d] of Object.entries(devs)) if (d.exp < now) delete devs[k];
+      const ids = Object.keys(devs).sort((x, y) => devs[x].lastSeen - devs[y].lastSeen);
+      const kicked = [];
+      while (ids.length >= MAX_DEVICES) { const old = ids.shift(); delete devs[old]; kicked.push(...this.kick(old)); }
+      const id = b64u(crypto.getRandomValues(new Uint8Array(9)));
+      devs[id] = { name: devName(b.name), created: now, lastSeen: now, exp: now + DEVICE_TTL * 1000 };
+      await st.put('devices', devs);
+      if (kicked.length) this.presence(kicked);
+      this.broadcast({ t: 'paired', device: { id, name: devs[id].name } });
+      return Response.json({ ok: true, id, name: devs[id].name });
+    }
+    if (op === '/device/check') {
+      const devs = await this.devices(), d = devs[b.id];
+      if (!d || d.exp < now) return Response.json({ ok: false });
+      if (now - d.lastSeen > 10 * 60 * 1000) { d.lastSeen = now; await st.put('devices', devs); }
+      return Response.json({ ok: true });
+    }
+    if (op === '/devices') {
+      const devs = await this.devices(), on = new Set(this.online().filter(({ a }) => a.kind === 'phone').map(({ a }) => a.dev));
+      return Response.json({ devices: Object.entries(devs).filter(([, d]) => d.exp > now).map(([id, d]) => ({ id, name: d.name, created: d.created, lastSeen: on.has(id) ? now : d.lastSeen, expires: d.exp, online: on.has(id) })).sort((x, y) => y.created - x.created),
+        desktop: this.online().filter(({ a }) => a.kind === 'desktop').length });
+    }
+    if (op === '/devices/revoke') {
+      const devs = await this.devices(), had = !!devs[b.id];
+      delete devs[b.id]; await st.put('devices', devs);
+      const gone = this.kick(b.id); this.presence(gone);
+      return Response.json({ ok: true, had });
+    }
+    if (op === '/notify') { this.broadcast({ t: b.t === 'inbox' ? 'inbox' : 'notice', time: String(b.time || '') }); return Response.json({ ok: true }); }
+    return new Response('not found', { status: 404 });
+  }
+  async accept(req) {
+    const kind = req.headers.get('X-Nova-Kind') === 'phone' ? 'phone' : 'desktop', dev = kind === 'phone' ? req.headers.get('X-Nova-Dev') || '' : 'desktop';
+    let name = 'Computer';
+    if (kind === 'phone') {
+      const devs = await this.devices(), d = devs[dev];
+      if (!d) return new Response('revoked', { status: 401 });
+      name = d.name; d.lastSeen = Date.now(); await this.state.storage.put('devices', devs);
+      // the same phone reconnecting: drop its older socket so it isn't counted twice
+      this.state.getWebSockets('dev:' + dev).forEach((w) => { try { w.close(4000, 'replaced'); } catch {} });
+    }
+    const stale = kind === 'phone' ? this.state.getWebSockets('dev:' + dev) : [];
+    const live = this.state.getWebSockets().filter((w) => !stale.includes(w));
+    if (live.length >= MAX_SOCKETS) return new Response('busy', { status: 429 });
+    const [client, server] = Object.values(new WebSocketPair());
+    this.state.acceptWebSocket(server, [kind, 'dev:' + dev]);
+    server.serializeAttachment({ kind, dev, name, at: Date.now() });
+    this.presence(stale);
+    return new Response(null, { status: 101, webSocket: client, headers: { 'Sec-WebSocket-Protocol': 'nova-sync' } });
+  }
+  async webSocketMessage(ws, msg) {
+    if (typeof msg !== 'string' || msg.length > MAX_MSG) return;
+    let m; try { m = JSON.parse(msg); } catch { return; }
+    if (!m || typeof m !== 'object' || !RELAY.has(m.t)) return;
+    const a = ws.deserializeAttachment() || {};
+    if (DESKTOP_ONLY.has(m.t) && a.kind !== 'desktop') return;
+    m.from = a.kind === 'phone' ? 'phone' : 'desktop';
+    const out = JSON.stringify(m);
+    for (const { w } of this.online()) if (w !== ws) this.send(w, out);
+  }
+  async webSocketClose(ws, code) { try { ws.close(code === 1005 || code === 1006 ? 1000 : code, 'bye'); } catch {} this.presence([ws]); }
+  async webSocketError(ws) { this.presence([ws]); }
+}
+async function pairClaim(req, env) {
+  if (!env.SESSION_KEY) fail(503, 'not_configured', { configured: false, need: 'SESSION_KEY' });
+  const bucket = 'pair:' + ipBucket(req), chk = await limiter(env, bucket, 'check', PAIR_FAIL_MAX);
+  if (chk.blocked) throw new HttpError(429, { error: 'too_many_attempts', retry_after: chk.retry_after, message: 'Too many wrong codes. Wait a few minutes and try again.' });
+  const b = await body(req);
+  let secret = str(b.secret, 'secret', 100);
+  if (secret.length <= 12) secret = secret.toUpperCase().replace(/[^A-Z0-9]/g, ''); // typed code: "abcd-efgh" works too
+  const r = await roomCall(env, '/pair/claim', { secret, name: typeof b.name === 'string' ? b.name : '' });
+  if (!r.ok) { await limiter(env, bucket, 'fail', PAIR_FAIL_MAX); fail(400, 'invalid_or_expired', { message: 'That pairing code didn’t work. Codes last 5 minutes and work once. Make a new one on your computer.' }); }
+  const t = await makeSession(env, { typ: 'dev', dev: r.id }, DEVICE_TTL);
+  await audit(env, 'POST /pair/claim', 'Phone paired: ' + r.name);
+  return { token: t.token, expiresAt: t.expiresAt, device: { id: r.id, name: r.name } };
+}
+async function syncUpgrade(req, env) {
+  if ((req.headers.get('Upgrade') || '').toLowerCase() !== 'websocket') fail(426, 'expected_websocket');
+  if (!originAllowed(req.headers.get('Origin'), env)) fail(403, 'origin_not_allowed');
+  // the token rides in the WebSocket subprotocol header, never in the URL
+  const protos = (req.headers.get('Sec-WebSocket-Protocol') || '').split(',').map((x) => x.trim());
+  if (!protos.includes('nova-sync')) fail(400, 'bad_protocol');
+  const p = await verifyToken((protos.find((x) => x.startsWith('tok.')) || '').slice(4), env);
+  return roomStub(env).fetch('https://room/ws', { headers: { Upgrade: 'websocket', 'X-Nova-Kind': p.typ === 'dev' ? 'phone' : 'desktop', 'X-Nova-Dev': p.typ === 'dev' ? p.dev : '' } });
+}
+
 // ---------- login ----------
 // Login attempts are counted in a Durable Object per IP (strongly consistent, unlike KV).
 export class LoginLimiter {
@@ -429,10 +588,8 @@ export class LoginLimiter {
 async function login(req, env) {
   if (!env.SESSION_KEY) fail(503, 'not_configured', { configured: false, need: 'SESSION_KEY' });
   // Bucket by IP; IPv6 by /48 so rotating addresses in one network share a bucket.
-  const ip = req.headers.get('CF-Connecting-IP') || 'unknown';
-  const bucket = ip.includes(':') ? ip.split(':').slice(0, 3).join(':') + '::/48' : ip;
-  const buckets = [['ip:' + bucket, LOGIN_MAX], ['global', LOGIN_GLOBAL_MAX]];
-  const call = async (name, op, max) => (await env.LOGIN_LIMITER.get(env.LOGIN_LIMITER.idFromName(name)).fetch(`https://limiter/${op}?max=${max}`, { method: 'POST' })).json();
+  const buckets = [['ip:' + ipBucket(req), LOGIN_MAX], ['global', LOGIN_GLOBAL_MAX]];
+  const call = (name, op, max) => limiter(env, name, op, max);
   const sts = await Promise.all(buckets.map(([n, m]) => call(n, 'check', m)));
   const blocked = sts.find((x) => x.blocked);
   if (blocked) throw new HttpError(429, { error: 'too_many_attempts', retry_after: blocked.retry_after, message: 'Too many tries. Wait a few minutes and try again.' });
@@ -450,17 +607,29 @@ async function route(req, env, url) {
   if (p === '/health' && m === 'GET') return { ok: true, service: 'nova-api', time: new Date().toISOString() };
   if (p === '/auth/login' && m === 'POST') return login(req, env);
   if (p === '/inbox/result' && m === 'POST') return inboxResult(req, env);
+  if (p === '/pair/claim' && m === 'POST') return pairClaim(req, env);
   if (p === '/school/assignments') { if (m !== 'GET') fail(405, 'method_not_allowed'); await schoolAuth(req, env); return schoolAssignments(env, url); }
 
   // Everything below needs a valid session.
-  const known = /^\/(status|audit|inbox|controls|github\/issue|github\/copilot-tasks|cursor\/agents(\/[^/]+(\/followup)?)?|grok\/command|notion\/tasks)$/.test(p);
+  const known = /^\/(status|audit|inbox|controls|github\/issue|github\/copilot-tasks|cursor\/agents(\/[^/]+(\/followup)?)?|grok\/command|notion\/tasks|pair\/start|devices|devices\/revoke)$/.test(p);
   if (!known) fail(404, 'not_found');
-  await verifySession(req, env);
+  const sess = await verifySession(req, env);
+
+  if (p === '/pair/start' && m === 'POST') { requireDesktop(sess); const r = await roomCall(env, '/pair/start'); await audit(env, 'POST /pair/start', 'Phone pairing code created'); return r; }
+  if (p === '/devices' && m === 'GET') { const r = await roomCall(env, '/devices'); return { devices: r.devices || [], desktop: r.desktop || 0, you: sess.typ === 'dev' ? sess.dev : null }; }
+  if (p === '/devices/revoke' && m === 'POST') {
+    const b = await body(req), id = str(b.id, 'id', 40);
+    if (sess.typ === 'dev' && sess.dev !== id) fail(403, 'desktop_only'); // a phone may only unpair itself
+    const r = await roomCall(env, '/devices/revoke', { id });
+    await audit(env, 'POST /devices/revoke', (sess.typ === 'dev' ? 'Phone unpaired itself: ' : 'Phone revoked: ') + id);
+    return { ok: true, removed: !!r.had };
+  }
 
   if (p === '/status' && m === 'GET') return status(env);
   if (p === '/audit' && m === 'GET') return { entries: await kvJson(env, 'audit', []) };
   if (p === '/inbox' && m === 'GET') return { items: await kvJson(env, 'inbox', []) };
   if (p === '/controls' && m === 'POST') {
+    requireDesktop(sess);
     const b = await body(req); if (typeof b.off !== 'boolean') fail(400, 'invalid_off');
     if (b.off) await env.NOVA_KV.put('controls_off', '1'); else await env.NOVA_KV.delete('controls_off');
     await audit(env, 'POST /controls', b.off ? 'Controls switched OFF' : 'Controls switched ON');
@@ -490,6 +659,7 @@ export default {
     // Browsers from other sites get no CORS headers (so they can't read responses); block their writes outright.
     if (origin && !originAllowed(origin, env) && req.method !== 'GET') return json({ error: 'origin_not_allowed' }, 403, origin, env);
     try {
+      if (url.pathname === '/sync') return await syncUpgrade(req, env);
       const out = await route(req, env, url);
       return json(out, 200, origin, env);
     } catch (e) {

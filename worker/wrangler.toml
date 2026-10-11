@@ -26,3 +26,12 @@ class_name = "LoginLimiter"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["LoginLimiter"]
+
+# Phone sync (NOVA 2.3): one room per Tyler, WebSockets with the hibernation API, plus the paired-device list.
+[[durable_objects.bindings]]
+name = "NOVA_ROOM"
+class_name = "NovaRoom"
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["NovaRoom"]

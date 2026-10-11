@@ -8,6 +8,14 @@ Tyler's personal command center for Calo. Static site on GitHub Pages.
   (600,000 iterations, random salt). The passphrase is never stored in this repo.
 - No secrets, tokens or passphrases belong in this repository.
 
+## NOVA 2.3: Phone (4th screen)
+
+Open `?screen=phone` on a phone (or install it from there) for a minimal, battery-light NOVA: flat core with clock, big Chat, Brightspace due soon, Tasks, Calo stats. App-launch panels stay on the computer.
+
+**Pairing:** on the computer, open Menu, then Settings, then Phone, then **Pair phone**. Scan the QR with the phone camera (or open `?screen=phone` and type the 8-letter code). The code lasts 5 minutes and works once. The phone gets its own revocable device token (180 days); remove it any time under Settings, then Phone. Install: iPhone Share, then Add to Home Screen; Android, then Install app.
+
+**Sync:** screen 1 bridges the local BroadcastChannel to a Cloudflare Durable Object room (`/sync`, WebSocket hibernation). Desktop panels get a **Phone** send-to button (key 4). The phone's **Send** returns a panel to any desktop screen. Chat is shared both ways. Chat and snapshots are relayed in memory only; only the device list and hashed pairing codes are stored. The token travels in the WebSocket subprotocol, never in a URL. The socket reconnects with backoff and closes while the phone is hidden to save battery.
+
 ## NOVA 2 layout (2.1: globe core · 2.2: school + app launchers)
 Every screen starts as the same empty blue grid, drawn once on a 2D canvas so it lines up across all three monitors
 (`js/grid.js`). The only thing on the home view is the 3D core on the centre screen, plus a menu button that fades in

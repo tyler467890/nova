@@ -1,9 +1,11 @@
 // NOVA <-> nova-api bridge: session login, Connections, the command confirm step, sending, the Replies inbox.
 // The session token lives in sessionStorage on screen 1 only (12h, HMAC-signed by the Worker). No API keys ever reach the browser.
 // Screens 2 and 3 never call these routes: they get relayed data, and their Chat hands a confirmed command to screen 1.
+// A paired phone (NOVA 2.3) has its own revocable device token instead (localStorage, 180 days, never the passphrase).
 export const API = 'https://nova-api.tyler467890.workers.dev';
 const SS = 'nova.api.session';
 const LS_PASS = 'nova.passphrase';
+const LS_DEV = 'nova.dev.v1';
 
 const $ = (s, r = document) => r.querySelector(s);
 export const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -24,8 +26,9 @@ export const INTEGS = [
   ['brightspace', 'Brightspace', 'Assignments and due dates from your NSCC calendar'],
 ];
 
-export const conn = { session: null, status: null, inbox: [], err: '', loading: false, inboxAt: 0 };
+export const conn = { session: null, status: null, inbox: [], err: '', loading: false, inboxAt: 0, device: null };
 try { const s = JSON.parse(sessionStorage.getItem(SS)); if (s && s.token && s.expiresAt > Date.now() + 60000) conn.session = s; } catch {}
+if (document.documentElement.getAttribute('data-screen') === 'phone') { try { const d = JSON.parse(localStorage.getItem(LS_DEV)); if (d && d.token && d.expiresAt > Date.now()) conn.device = d; } catch {} }
 const changed = () => window.dispatchEvent(new CustomEvent('nova:conn'));
 
 // ---------- API (screen 1 only) ----------
@@ -46,9 +49,23 @@ export async function apiLogin(pass) {
 export function apiLogout() { conn.session = null; conn.status = null; conn.inbox = []; conn.inboxAt = 0; sessionStorage.removeItem(SS); }
 async function ensureSession() {
   if (conn.session && conn.session.expiresAt > Date.now() + 60000) return true;
+  if (conn.device) { if (conn.device.expiresAt > Date.now()) { conn.session = { token: conn.device.token, expiresAt: conn.device.expiresAt }; return true; } return false; }
   const pass = localStorage.getItem(LS_PASS);
   return pass ? apiLogin(pass) : false;
 }
+export const sessionToken = async () => ((await ensureSession()) ? conn.session.token : null);
+// ---------- phone pairing ----------
+export async function pairClaim(secret, name) {
+  try {
+    const r = await fetch(API + '/pair/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ secret, name }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.token) return { ok: false, msg: d.message || (r.status === 429 ? 'Too many tries. Wait a few minutes.' : 'That code didn’t work. Make a new one on your computer.') };
+    conn.device = { token: d.token, expiresAt: d.expiresAt, id: d.device.id, name: d.device.name, pairedAt: Date.now() };
+    localStorage.setItem(LS_DEV, JSON.stringify(conn.device)); conn.session = null;
+    return { ok: true, device: d.device };
+  } catch { return { ok: false, msg: 'Can’t reach NOVA’s secure service. Check your connection and try again.' }; }
+}
+export function forgetDevice() { conn.device = null; localStorage.removeItem(LS_DEV); apiLogout(); }
 export async function api(path, opts = {}, retry = true) {
   if (!(await ensureSession())) throw Object.assign(new Error(conn.err || 'not signed in'), { status: 401 });
   const r = await fetch(API + path, { ...opts, headers: { ...(opts.body ? { 'Content-Type': 'application/json' } : {}), Authorization: 'Bearer ' + conn.session.token } });
